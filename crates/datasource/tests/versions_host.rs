@@ -425,3 +425,107 @@ async fn a_tag_the_mirror_leaves_undated_is_dated_through_github() {
             .any(|path| path.ends_with("/matching-refs/tags/"))
     );
 }
+
+/// Undated floating tags no candidate names — `v1` and `v2` below a `v2.0.0`
+/// baseline — no longer send the whole tag catalog to GitHub: the mirror
+/// answers, and those tags are listed unchecked. An undated tag a candidate
+/// names still goes to GitHub.
+#[tokio::test]
+async fn undated_tags_below_the_candidates_keep_the_mirror() {
+    use patchula_datasource::Candidates;
+    use patchula_words::Scheme;
+    struct Floating {
+        requests: Mutex<Vec<String>>,
+        newer_floating: bool,
+    }
+    impl Transport for Floating {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async move {
+                let path = request.url().path().to_owned();
+                self.requests.lock().unwrap().push(path.clone());
+                let body = if request.url().host_str() == Some("api.github.com") {
+                    // GitHub answering is what the test watches for; its
+                    // answer itself is not under test.
+                    return Ok(Response {
+                        status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
+                        headers: Default::default(),
+                        body: Vec::new(),
+                        stale: None,
+                    });
+                } else if path.ends_with("tags.json") {
+                    let mut tags = vec![
+                        json!({"tag":"v1","sha":"1".repeat(40)}),
+                        json!({"tag":"v2","sha":"2".repeat(40)}),
+                        json!({"tag":"v2.0.0","sha":"2".repeat(40)}),
+                        json!({"tag":"v2.1.0","sha":"3".repeat(40)}),
+                    ];
+                    if self.newer_floating {
+                        tags.push(json!({"tag":"v3","sha":"4".repeat(40)}));
+                    }
+                    json!({"tags":tags,"truncated":false})
+                } else {
+                    json!({"releases":[
+                        {"tag":"v2.0.0","date":"2026-01-01T00:00:00Z","prerelease":false},
+                        {"tag":"v2.1.0","date":"2026-02-01T00:00:00Z","prerelease":false}
+                    ],"truncated":false})
+                };
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: Default::default(),
+                    body: body.to_string().into_bytes(),
+                    stale: None,
+                })
+            })
+        }
+    }
+    for newer_floating in [false, true] {
+        let cache = memory().await;
+        let transport = Arc::new(Floating {
+            requests: Mutex::new(Vec::new()),
+            newer_floating,
+        });
+        let github = patchula_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            transport.clone(),
+        )
+        .unwrap();
+        let result = Client::new(
+            github,
+            patchula_datasource::cached(cache.clone(), transport.clone(), 4).unwrap(),
+            cache,
+        )
+        .with_candidates(Candidates::after(
+            Scheme::Loose,
+            Source::GithubTags,
+            "v2.0.0",
+            false,
+        ))
+        .lookup(&patchula_config::PackageId::public(
+            Source::GithubTags,
+            "FiloSottile/age",
+        ))
+        .await;
+        let asked_github = transport
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|path| !path.starts_with("/data/"));
+        assert_eq!(asked_github, newer_floating);
+        if newer_floating {
+            continue;
+        }
+        let catalog = result.unwrap();
+        let at = |tag: &str| catalog.versions.iter().find(|v| v.version == tag).unwrap();
+        assert_eq!(
+            at("v2.1.0").published_at.as_deref(),
+            Some("2026-02-01T00:00:00Z")
+        );
+        assert!(!at("v2.1.0").unchecked);
+        for floating in ["v1", "v2"] {
+            assert!(at(floating).unchecked && at(floating).published_at.is_none());
+        }
+    }
+}

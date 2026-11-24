@@ -345,15 +345,28 @@ enum Access<'a> {
     /// A container registry read, with the registry's bearer token when it
     /// issued one. Registry rules, throttles and quotas apply.
     Registry(Option<Bearer<'a>>),
+    /// A plain read whose answer the caller keeps itself: nothing is read
+    /// from or written to the HTTP cache. A 429 cools the host and is
+    /// retried like a registry's, and one that outlasts the retries is the
+    /// error it is.
+    Uncached,
 }
 impl<'a> Access<'a> {
     fn registry(self) -> bool {
         matches!(self, Access::Registry(_))
     }
+    /// Whether the read goes through the HTTP cache.
+    fn cached(self) -> bool {
+        !matches!(self, Access::Uncached)
+    }
+    /// Whether a 429 cools the host and is retried.
+    fn throttled(self) -> bool {
+        !matches!(self, Access::Plain)
+    }
     fn bearer(self) -> Option<Bearer<'a>> {
         match self {
             Access::Registry(bearer) => bearer,
-            Access::Plain => None,
+            Access::Plain | Access::Uncached => None,
         }
     }
 }
@@ -462,6 +475,14 @@ impl Cached {
     pub fn credential(&self, url: &str) -> Option<&Credential> {
         matching(&self.inner.options.credentials, &Url::parse(url).ok()?)
     }
+    /// The operator entry a plain read of `url` (`get`, `uncached`) is
+    /// answered under: the mirror standing in for it when one does, else the
+    /// entry covering it.
+    pub fn plain_credential(&self, url: &str) -> Option<&Credential> {
+        let url = Url::parse(url).ok()?;
+        let url = mirrored(&self.inner.options.credentials, &url).unwrap_or(url);
+        matching(&self.inner.options.credentials, &url)
+    }
     pub fn stats(&self) -> Stats {
         Stats {
             requests: self.inner.requests.load(Ordering::Relaxed),
@@ -471,6 +492,21 @@ impl Cached {
     }
     pub async fn get(&self, url: &str, accept: &str) -> Result<Response, Error> {
         self.get_representation(url, accept, None, Access::Plain, Method::GET)
+            .await
+    }
+    /// A `GET` or `HEAD` whose answer the caller keeps itself, such as one
+    /// version's release date, which the datasource stores as state: an
+    /// operator mirror stands in and operator credentials apply as for `get`,
+    /// the host's limit and cooldown hold, and a 429 is retried as a
+    /// registry's is, but nothing is read from or written to the HTTP cache.
+    /// A 429 the retries do not clear is `Status(429)`, never a success.
+    pub async fn uncached(
+        &self,
+        method: Method,
+        url: &str,
+        accept: &str,
+    ) -> Result<Response, Error> {
+        self.get_representation(url, accept, None, Access::Uncached, method)
             .await
     }
 
@@ -714,7 +750,11 @@ impl Cached {
             scope,
         )?;
         let mut trace = RequestTrace::new(method.as_str(), &url);
-        let cached = self.inner.cache.http_get(&key).await?;
+        let cached = if access.cached() {
+            self.inner.cache.http_get(&key).await?
+        } else {
+            None
+        };
         let now = conditional::unix_now();
         let no_cache = cached.as_ref().is_some_and(|entry| {
             entry.cache_control.as_deref().is_some_and(|c| {
@@ -904,7 +944,7 @@ impl Cached {
                 // available digest pins depend on which response finishes first.
                 self.cooldown(&target, window, true)?;
             }
-            if registry && response.status == StatusCode::TOO_MANY_REQUESTS {
+            if access.throttled() && response.status == StatusCode::TOO_MANY_REQUESTS {
                 // Only manifest GETs consume Docker Hub's pull counter, so only
                 // their 429 can mean it is spent. A HEAD or tag-list 429 cools
                 // the host for the counter's window when it names one (that is
@@ -935,9 +975,10 @@ impl Cached {
                     delay
                 };
                 drop(permit.take());
-                if let Some(response) = self
-                    .stale_registry(cached.as_ref(), &url, accept, &method, scope)
-                    .await?
+                if registry
+                    && let Some(response) = self
+                        .stale_registry(cached.as_ref(), &url, accept, &method, scope)
+                        .await?
                 {
                     return Ok(response);
                 }
@@ -968,6 +1009,7 @@ impl Cached {
             // a day later, not on every run.
             if response.status == StatusCode::NOT_FOUND
                 && registry
+                && access.cached()
                 && let Some(window) = self.inner.options.rules.remember_missing(&url)
             {
                 self.inner
@@ -990,6 +1032,9 @@ impl Cached {
                     .await?;
             }
             return Err(Error::Status(response.status.as_u16()));
+        }
+        if !access.cached() {
+            return Ok(response);
         }
         if !not_modified && let Some(derived) = derived {
             let body = conditional::Body::Streaming(
@@ -1565,6 +1610,117 @@ mod tests {
                 .is_err()
         );
         assert!(transport.0.lock().unwrap().is_empty());
+    }
+    /// An uncached read reaches the network every time and leaves the HTTP
+    /// cache untouched, while the same URL read through `get` is stored.
+    #[tokio::test]
+    async fn an_uncached_read_neither_reads_nor_writes_the_cache() {
+        const URL: &str = "https://proxy.golang.org/example.com/m/@v/v1.0.0.info";
+        let transport = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let client =
+            Cached::with_options(cache.clone(), transport.clone(), Options::default()).unwrap();
+        for _ in 0..2 {
+            let response = client
+                .uncached(Method::GET, URL, "text/plain")
+                .await
+                .unwrap();
+            assert_eq!(response.body, b"new");
+        }
+        assert_eq!(transport.0.load(Ordering::Relaxed), 2);
+        assert!(cache.http_get(&key(URL)).await.unwrap().is_none());
+        client.get(URL, "text/plain").await.unwrap();
+        assert!(cache.http_get(&key(URL)).await.unwrap().is_some());
+        // A stored answer is not what an uncached read returns either.
+        client
+            .uncached(Method::GET, URL, "text/plain")
+            .await
+            .unwrap();
+        assert_eq!(transport.0.load(Ordering::Relaxed), 4);
+    }
+    /// An uncached 429 cools the host and is retried; one the retries do not
+    /// clear is the error it is, never a successful answer.
+    #[tokio::test]
+    async fn an_uncached_429_is_retried_then_an_error() {
+        for (retries, expected_calls, succeeds) in [(3, 3, true), (1, 2, false)] {
+            let transport = Arc::new(Limited {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                retry_after: "0",
+            });
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let client = Cached::with_options(
+                cache,
+                transport.clone(),
+                Options {
+                    registry_retries: retries,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let result = client
+                .uncached(
+                    Method::HEAD,
+                    "https://repo.example/a/1.0/a-1.0.pom",
+                    "application/xml",
+                )
+                .await;
+            assert_eq!(transport.calls.load(Ordering::Relaxed), expected_calls);
+            if succeeds {
+                assert_eq!(result.unwrap().status, 200);
+            } else {
+                assert!(matches!(result, Err(Error::Status(429))));
+            }
+        }
+    }
+    /// An operator mirror stands in for an uncached read as it does for
+    /// `get`, with its credentials, and nothing is stored under its scope.
+    #[tokio::test]
+    async fn an_uncached_read_goes_to_the_mirror() {
+        const PUBLIC: &str = "https://repo.maven.apache.org/maven2/g/a/1.0/a-1.0.pom";
+        const MIRROR: &str = "https://acme.jfrog.io/maven/g/a/1.0/a-1.0.pom";
+        let entry = Credential::new(
+            "https://acme.jfrog.io/maven",
+            crate::Auth::Bearer {
+                token: "tok".into(),
+            },
+        )
+        .unwrap()
+        .mirroring("https://repo.maven.apache.org/maven2")
+        .unwrap();
+        let reply = Response {
+            status: StatusCode::OK,
+            headers: header::HeaderMap::new(),
+            body: Vec::new(),
+            stale: None,
+        };
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let transport = Arc::new(Scripted(Mutex::new(
+            [(MIRROR, Some("Bearer tok"), reply)].into(),
+        )));
+        let client = Cached::with_options(
+            cache.clone(),
+            transport.clone(),
+            Options {
+                credentials: vec![entry],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        client
+            .uncached(Method::HEAD, PUBLIC, "application/xml")
+            .await
+            .unwrap();
+        assert!(transport.0.lock().unwrap().is_empty());
+        let scope = client.credential(MIRROR).unwrap().scope().to_owned();
+        let stored = conditional::key(
+            "HEAD",
+            MIRROR,
+            &[("accept", "application/xml")],
+            None,
+            Some(&scope),
+        )
+        .unwrap();
+        assert!(cache.http_get(&stored).await.unwrap().is_none());
     }
     /// Coalesced reads leave nothing behind once their callers are done,
     /// whether they finish, fail or are cancelled.

@@ -213,7 +213,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_cache::representation("oci-tags", 2));
+    .representation(&patchula_cache::representation("oci-tags", 3));
     let fetched = cache.http_get(&key).await.unwrap().unwrap().fetched_at;
     assert_eq!(
         sources
@@ -466,7 +466,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_cache::representation("oci-tags", 2));
+    .representation(&patchula_cache::representation("oci-tags", 3));
     let entry = cache.http_get(&key).await.unwrap().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&entry.body).unwrap(),

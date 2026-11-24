@@ -74,6 +74,7 @@ async fn read(engine: &Engine, wait: u32, now: DateTime<Utc>, force: bool) -> (C
                 BTreeSet::new()
             },
             &MiseVias::new(),
+            &CatalogCandidates::new(),
             now,
         )
         .await
@@ -534,6 +535,7 @@ async fn views_are_kept_per_access_and_a_repository_view_by_its_id() {
                     &BTreeMap::from([(key.clone(), 24)]),
                     &BTreeSet::new(),
                     &MiseVias::new(),
+                    &CatalogCandidates::new(),
                     now(),
                 )
                 .await
@@ -652,4 +654,43 @@ fn a_public_listing_with_options_is_fetched_for_a_repository_that_wrote_them() {
     assert_eq!(via(PLAIN), "acme/first");
     // Only evil/second wrote these options, so only its token can go there.
     assert_eq!(via(ELSEWHERE), "evil/second");
+}
+
+/// A view stored for narrower candidates is not reused by a lookup that
+/// needs more of its catalog described, since the rest are listed
+/// unchecked; a view stored for wider candidates serves it.
+#[tokio::test]
+async fn a_view_serves_only_lookups_its_candidates_cover() {
+    use patchula_datasource::Candidates;
+    let registry = Arc::new(Registry::default());
+    let engine = engine(memory().await, registry.clone(), "offline");
+    let key = key("fixture");
+    let after =
+        |floor: &str| Candidates::after(patchula_words::Scheme::Semver, Source::Npm, floor, false);
+    for (candidates, reused) in [
+        (after("1.5.0"), false),
+        (after("1.5.0"), true),
+        (after("1.0.0"), false),
+        (after("1.5.0"), true),
+        (Candidates::all(), false),
+        (after("0.1.0"), true),
+    ] {
+        let before = registry.requests.load(Ordering::SeqCst);
+        let (_, evidence, _) = engine
+            .age_catalogs(
+                BTreeSet::from([key.clone()]),
+                &BTreeMap::from([(key.clone(), 24)]),
+                &BTreeSet::new(),
+                &MiseVias::new(),
+                &CatalogCandidates::from([(key.clone(), candidates)]),
+                now(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(evidence[&key].reused, reused);
+        assert_eq!(
+            registry.requests.load(Ordering::SeqCst) - before,
+            usize::from(!reused)
+        );
+    }
 }

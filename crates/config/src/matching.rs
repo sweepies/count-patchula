@@ -240,27 +240,21 @@ impl Filter {
         };
         Ok(yes != self.negated)
     }
-    /// Whether the filter deliberately admits the prerelease `text`, whose
-    /// version without its prerelease part is `release`. A negated filter
-    /// only excludes, so it never asks. A `regex:` filter asks when it
-    /// matches the prerelease but not its release, so the match comes from
-    /// the prerelease part (`regex:-rc\.`, `regex:nightly`). A `semver:`
-    /// range asks when it names a prerelease version itself
-    /// (`semver:>=3.0.0-rc.1`, `semver:[1.0-beta1,2)`) and matches `text`.
-    pub fn asks_for_prerelease(
-        &self,
-        scheme: Ecosystem,
-        text: &str,
-        release: &str,
-    ) -> Result<bool, String> {
+    /// Whether the filter, which the prerelease `text` already satisfies,
+    /// deliberately admits it; `release` gives `text` without its
+    /// prerelease part, and is asked for only when a `regex:` filter needs
+    /// it. A negated filter only excludes, so it never asks. A `regex:`
+    /// filter asks when it does not match the release, so the match comes
+    /// from the prerelease part (`regex:-rc\.`, `regex:nightly`). A
+    /// `semver:` range asks when it names a prerelease version itself
+    /// (`semver:>=3.0.0-rc.1`, `semver:[1.0-beta1,2)`).
+    pub fn asks_for_prerelease(&self, scheme: Ecosystem, release: impl FnOnce() -> String) -> bool {
         if self.negated {
-            return Ok(false);
+            return false;
         }
         match &self.kind {
-            FilterKind::Regex(regex) => Ok(regex.is_match(text) && !regex.is_match(release)),
-            FilterKind::Semver(range) => {
-                Ok(names_prerelease(scheme, range) && self.matches(scheme, text)?)
-            }
+            FilterKind::Regex(regex) => !regex.is_match(&release()),
+            FilterKind::Semver(range) => names_prerelease(scheme, range),
         }
     }
 }

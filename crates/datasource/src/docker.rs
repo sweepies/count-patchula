@@ -62,7 +62,7 @@ fn compact_config(
     .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_CONFIG_NOTES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-config-notes", 2, compact_config);
+    patchula_http::Derived::new("oci-config-notes", 3, compact_config);
 
 /// The config of one image or chart version, as release notes read it.
 struct ImageConfig {
@@ -144,7 +144,7 @@ fn oci_catalog(tags: Vec<String>) -> Catalog {
 /// The persisted anonymous pull token: the code that picks and expires the
 /// bearer out of a token answer is its compaction, so it carries its own
 /// version like a `Derived` and `tests/derived-versions.tsv` guards it.
-pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 2);
+pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 3);
 fn token_key(host: &str, path: &str) -> Result<HttpKey> {
     Ok(HttpKey::new(
         "GET",
@@ -168,7 +168,7 @@ fn compact_tags(
     serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-tags", 2, compact_tags);
+    patchula_http::Derived::new("oci-tags", 3, compact_tags);
 
 pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     let package = package.strip_prefix("oci://").unwrap_or(package);

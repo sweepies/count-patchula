@@ -32,6 +32,7 @@ fn derives() -> Vec<Registered> {
         erase(crate::forge::FORGE_GITLAB_TAGS),
         erase(crate::forge::FORGE_GITEA_TAGS),
         erase(crate::github::GITHUB_RELEASE_HEAD),
+        erase(crate::node::NODE_LTS),
     ]
 }
 

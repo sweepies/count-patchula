@@ -119,20 +119,26 @@ fn compact_platform(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     use patchula_http::CacheError::Document;
+    /// The config's platform fields; its history and layers are skipped.
+    #[derive(Deserialize)]
+    struct Config {
+        os: Option<String>,
+        architecture: Option<String>,
+        variant: Option<String>,
+    }
     let mut read = HashRead::new(body);
-    let config: Value =
+    let config: Config =
         patchula_http::conditional::json_document(&mut read).map_err(|_| Document)?;
-    let text = |field: &str| config[field].as_str().map(str::to_owned);
     serde_json::to_vec(&Platform {
         sha256: read.digest(),
-        os: text("os"),
-        architecture: text("architecture"),
-        variant: text("variant"),
+        os: config.os,
+        architecture: config.architecture,
+        variant: config.variant,
     })
     .map_err(|_| Document)
 }
 pub(crate) const IMAGE_PLATFORM: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("image-platform", 5, compact_platform);
+    patchula_http::Derived::new("image-platform", 6, compact_platform);
 
 fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String {
     match variant {
@@ -191,6 +197,78 @@ fn purl(text: &str) -> Option<Purl> {
     ))
 }
 
+/// An SPDX 2.3 document, an in-toto statement around one, or a DSSE envelope
+/// around that, read in one pass: only the fields the compact form keeps,
+/// every other field skipped as it streams.
+#[derive(Deserialize)]
+struct SbomDocument {
+    /// A DSSE envelope's base64 statement.
+    payload: Option<String>,
+    /// An in-toto statement's subjects.
+    #[serde(default)]
+    subject: Vec<Subject>,
+    #[serde(rename = "predicateType")]
+    predicate_type: Option<String>,
+    /// An in-toto statement's SPDX document.
+    predicate: Option<Spdx>,
+    // A bare SPDX document's own fields, spelled out rather than flattened:
+    // `flatten` would buffer every other field, packages included.
+    #[serde(rename = "spdxVersion")]
+    version: Option<String>,
+    #[serde(rename = "creationInfo", default)]
+    creation: CreationInfo,
+    #[serde(default)]
+    relationships: Vec<Relationship>,
+    #[serde(default)]
+    packages: Vec<SpdxPackage>,
+}
+#[derive(Deserialize)]
+struct Subject {
+    #[serde(default)]
+    digest: SubjectDigest,
+}
+#[derive(Default, Deserialize)]
+struct SubjectDigest {
+    sha256: Option<String>,
+}
+#[derive(Deserialize)]
+struct Spdx {
+    #[serde(rename = "spdxVersion")]
+    version: Option<String>,
+    #[serde(rename = "creationInfo", default)]
+    creation: CreationInfo,
+    #[serde(default)]
+    relationships: Vec<Relationship>,
+    #[serde(default)]
+    packages: Vec<SpdxPackage>,
+}
+#[derive(Default, Deserialize)]
+struct CreationInfo {
+    #[serde(default)]
+    creators: Vec<String>,
+}
+#[derive(Deserialize)]
+struct Relationship {
+    #[serde(rename = "relationshipType")]
+    kind: Option<String>,
+    #[serde(rename = "spdxElementId")]
+    element: Option<String>,
+}
+#[derive(Deserialize)]
+struct SpdxPackage {
+    #[serde(rename = "SPDXID")]
+    id: Option<String>,
+    #[serde(rename = "externalRefs", default)]
+    references: Vec<ExternalRef>,
+}
+#[derive(Deserialize)]
+struct ExternalRef {
+    #[serde(rename = "referenceType")]
+    kind: Option<String>,
+    #[serde(rename = "referenceLocator")]
+    locator: Option<String>,
+}
+
 /// Read an SPDX 2.3 document from an in-toto statement, a DSSE envelope
 /// around one, or on its own.
 fn compact_sbom(
@@ -200,47 +278,52 @@ fn compact_sbom(
     // The stored SBOM names its document's digest: the bytes are hashed as
     // they stream to the parser, never read whole.
     let mut read = HashRead::new(body);
-    let mut value: Value =
+    let mut document: SbomDocument =
         patchula_http::conditional::json_document(&mut read).map_err(|_| Document)?;
     let sha256 = read.digest();
-    if let Some(payload) = value["payload"].as_str() {
+    if let Some(payload) = &document.payload {
         let decoded = STANDARD.decode(payload).map_err(|_| Document)?;
-        value = serde_json::from_slice(&decoded).map_err(|_| Document)?;
+        document = serde_json::from_slice(&decoded).map_err(|_| Document)?;
     }
-    let subjects = value["subject"]
-        .as_array()
-        .map(|s| {
-            s.iter()
-                .filter_map(|s| s["digest"]["sha256"].as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    if value.get("predicate").is_some() {
-        if value["predicateType"] != SPDX {
-            return Err(Document);
+    let subjects = document
+        .subject
+        .into_iter()
+        .filter_map(|s| s.digest.sha256)
+        .collect();
+    let spdx = match document.predicate {
+        Some(predicate) => {
+            if document.predicate_type.as_deref() != Some(SPDX) {
+                return Err(Document);
+            }
+            predicate
         }
-        value = value["predicate"].take();
-    }
-    if !value["spdxVersion"]
-        .as_str()
+        None => Spdx {
+            version: document.version,
+            creation: document.creation,
+            relationships: document.relationships,
+            packages: document.packages,
+        },
+    };
+    if !spdx
+        .version
+        .as_deref()
         .is_some_and(|v| v.starts_with("SPDX-2."))
     {
         return Err(Document);
     }
-    let generator = value["creationInfo"]["creators"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|c| c.as_str()?.strip_prefix("Tool: "))
+    let generator = spdx
+        .creation
+        .creators
+        .iter()
+        .filter_map(|c| c.strip_prefix("Tool: "))
         .collect::<Vec<_>>()
         .join(", ");
     // A binary GENERATED_FROM a source entry is covered by that entry.
-    let derived: BTreeSet<&str> = value["relationships"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|r| r["relationshipType"] == "GENERATED_FROM")
-        .filter_map(|r| r["spdxElementId"].as_str())
+    let derived: BTreeSet<&str> = spdx
+        .relationships
+        .iter()
+        .filter(|r| r.kind.as_deref() == Some("GENERATED_FROM"))
+        .filter_map(|r| r.element.as_deref())
         .collect();
     let mut compact = Compact {
         sha256,
@@ -253,16 +336,14 @@ fn compact_sbom(
         distro: None,
         sources: BTreeSet::new(),
     };
-    for package in value["packages"].as_array().into_iter().flatten() {
-        let listed = package["SPDXID"]
-            .as_str()
-            .is_some_and(|id| derived.contains(id));
-        for reference in package["externalRefs"].as_array().into_iter().flatten() {
-            if reference["referenceType"] != "purl" {
+    for package in &spdx.packages {
+        let listed = package.id.as_deref().is_some_and(|id| derived.contains(id));
+        for reference in &package.references {
+            if reference.kind.as_deref() != Some("purl") {
                 continue;
             }
             let Some((kind, namespace, name, version, qualifiers)) =
-                reference["referenceLocator"].as_str().and_then(purl)
+                reference.locator.as_deref().and_then(purl)
             else {
                 continue;
             };
@@ -303,7 +384,7 @@ fn compact_sbom(
     serde_json::to_vec(&compact).map_err(|_| Document)
 }
 pub(crate) const SBOM_OS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("sbom-os", 5, compact_sbom);
+    patchula_http::Derived::new("sbom-os", 6, compact_sbom);
 
 /// OSV's ecosystem name for an OS release, when OSV covers it.
 fn ecosystem(kind: &str, namespace: &str, distro: Option<&(String, String)>) -> Option<String> {

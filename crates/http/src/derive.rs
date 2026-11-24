@@ -16,12 +16,19 @@ pub enum Body {
     Streaming(crate::BodyStream),
 }
 
+/// How much of a streamed body `json_document` reads at once. serde_json's
+/// reader asks for one byte at a time, so an unbuffered body would cost a
+/// dynamic call (and every wrapper's work, such as a running hash) per byte.
+const JSON_BUFFER: usize = 64 * 1024;
+
 /// Read one JSON document as it arrives, the way `serde_json::from_slice`
-/// reads a slice: one value, trailing data refused.
+/// reads a slice: one value, trailing data refused. The body is read through
+/// a buffer, so a wrapper around it sees large reads, never single bytes.
 pub fn json_document<T: serde::de::DeserializeOwned>(
     body: &mut dyn std::io::Read,
 ) -> serde_json::Result<T> {
-    let mut deserializer = serde_json::Deserializer::from_reader(body);
+    let mut deserializer =
+        serde_json::Deserializer::from_reader(std::io::BufReader::with_capacity(JSON_BUFFER, body));
     let value = T::deserialize(&mut deserializer)?;
     deserializer.end()?;
     Ok(value)
@@ -257,5 +264,55 @@ mod tests {
         assert!(json_document::<serde_json::Value>(&mut reader).is_err());
         let mut reader: &[u8] = br#"{"a": 1"#;
         assert!(json_document::<serde_json::Value>(&mut reader).is_err());
+    }
+
+    /// A body read through `json_document` sees large reads, not one per
+    /// byte, and a document split over many reads still parses whole.
+    #[test]
+    fn json_document_reads_its_body_in_large_pieces() {
+        struct Counted<'a> {
+            inner: &'a [u8],
+            reads: usize,
+        }
+        impl std::io::Read for Counted<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                // At most 7 bytes per read, as a slow stream would give.
+                let take = buffer.len().min(7).min(self.inner.len());
+                buffer[..take].copy_from_slice(&self.inner[..take]);
+                self.inner = &self.inner[take..];
+                Ok(take)
+            }
+        }
+        let document = serde_json::to_vec(&serde_json::json!({
+            "versions": (0..2000).map(|i| format!("1.0.{i}")).collect::<Vec<_>>()
+        }))
+        .unwrap();
+        let mut body = Counted {
+            inner: &document,
+            reads: 0,
+        };
+        let value: serde_json::Value = json_document(&mut body).unwrap();
+        assert_eq!(value["versions"].as_array().unwrap().len(), 2000);
+        // Every read was a request for a buffer's worth, answered 7 bytes at
+        // a time: one call per 7 bytes plus the end, never one per byte.
+        assert!(body.reads <= document.len() / 7 + 2, "{} reads", body.reads);
+    }
+
+    /// A stream that fails mid-document still fails the parse through the
+    /// buffer, and the transport error is the one `derive` keeps.
+    #[tokio::test]
+    async fn a_buffered_parse_still_sees_a_mid_stream_failure() {
+        fn document(body: &mut dyn std::io::Read) -> Result<Vec<u8>, ()> {
+            serde_json::to_vec(&json_document::<serde_json::Value>(body).map_err(|_| ())?)
+                .map_err(|_| ())
+        }
+        let decoding = Arc::new(Semaphore::new(4));
+        let (body, _) = flagged(vec![
+            chunk(br#"{"versions":{"1.0.0":"#),
+            Err(crate::Error::Timeout),
+        ]);
+        let result = derive(body, document, &decoding).await;
+        assert!(matches!(result, Err(Error::Stream(crate::Error::Timeout))));
     }
 }

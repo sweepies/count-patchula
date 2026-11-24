@@ -71,21 +71,30 @@ impl Client {
             // Tags carry no reliable dates of their own; the releases
             // document dates them. A tag it leaves undated may be an
             // annotated tag, which GitHub dates by its tagger: the mirror
-            // cannot tell, so GitHub's own tag catalog answers instead.
+            // cannot tell, so when the lookup's candidates name such a tag,
+            // GitHub's own tag catalog answers instead. An undated tag no
+            // candidate names — a floating `v1` below the baseline — is
+            // listed unchecked, and the mirror still answers.
+            let wanted = self.candidates.wanted();
+            let date = |tag: &MirrorEntry| dates.get(&tag.tag).cloned().flatten();
             if tags
                 .tags
                 .iter()
-                .any(|tag| dates.get(&tag.tag).cloned().flatten().is_none())
+                .any(|tag| date(tag).is_none() && wanted.contains(&tag.tag))
             {
                 return Ok(None);
             }
             tags.tags
                 .iter()
                 .map(|tag| {
-                    Version::from(Release {
-                        published_at: dates.get(&tag.tag).cloned().flatten(),
-                        ..self::tag(tag)
-                    })
+                    let published_at = date(tag);
+                    Version {
+                        unchecked: published_at.is_none(),
+                        ..Version::from(Release {
+                            published_at,
+                            ..self::tag(tag)
+                        })
+                    }
                 })
                 .collect()
         } else {

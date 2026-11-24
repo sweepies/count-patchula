@@ -137,6 +137,12 @@ impl Groups {
         dependencies: impl IntoIterator<Item = &'a Dependency>,
         mut candidate: impl FnMut(&Dependency, Update) -> Option<Candidate>,
     ) -> Self {
+        // A group needs a Pkl package on one side, so a repository without
+        // one forms none, and no dependency's policy is asked for.
+        let dependencies: Vec<&Dependency> = dependencies.into_iter().collect();
+        if !dependencies.iter().any(|dep| dep.source == Source::Pkl) {
+            return Self::default();
+        }
         let mut found = BTreeMap::<String, Vec<&Dependency>>::new();
         for dep in dependencies {
             if let Some(repository) = declared_repository(dep) {
@@ -274,6 +280,33 @@ mod tests {
                 "{source:?} {package}"
             );
         }
+    }
+
+    /// Without a Pkl package no group can form, so no dependency's policy
+    /// is asked for; with one, the policy decides.
+    #[test]
+    fn a_repository_without_pkl_packages_asks_no_policy() {
+        let candidate = || Candidate {
+            ungrouped: true,
+            commit_prefix: "chore(deps)".into(),
+        };
+        let others = [
+            dep(Source::Go, "github.com/jdx/hk"),
+            dep(Source::Mise, "hk"),
+        ];
+        let mut asked = 0;
+        let groups = Groups::collect(&others, |_, _| {
+            asked += 1;
+            Some(candidate())
+        });
+        assert_eq!(asked, 0);
+        assert!(groups.0.is_empty());
+        let with_pkl = [
+            dep(Source::Pkl, "pkg.pkl-lang.org/github.com/jdx/hk/hk"),
+            dep(Source::Go, "github.com/jdx/hk"),
+        ];
+        let groups = Groups::collect(&with_pkl, |_, _| Some(candidate()));
+        assert!(!groups.0.is_empty());
     }
 
     #[test]
