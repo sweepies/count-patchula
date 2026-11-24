@@ -1,8 +1,12 @@
 name: Count Patchula
 
 # The Count updates his own repository, set up the way the GitHub Actions guide
-# describes, with the App's private key read from Infisical instead of a
-# repository secret.
+# describes, except for the token: instead of minting one from a private key in
+# a repository secret, the job's OIDC token logs in to OpenBao under the jwt/
+# role count-patchula-self, which only this workflow on main can use, and
+# leases an installation token for the App (sweepies-ops) with the permissions
+# the server guide lists. The token and the OpenBao session are revoked when
+# the job ends.
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -24,52 +28,50 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      # Checks out the source when building from it.
       contents: read
-      # Reads the App's private key from Infisical over OIDC.
+      # Logs in to OpenBao over OIDC.
       id-token: write
+    # The mise settings stay on the steps that run this repository's tasks, out
+    # of the Count's own environment.
     steps:
-      - if: inputs.source
-        uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - if: inputs.source
-        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        env:
+          MISE_LOCKED: "1"
+          MISE_ENABLE_TOOLS: ${{ inputs.source && 'nu,gh,rust,mr-boxington,zig' || 'nu,gh' }}
         with:
-          install_args: rust
           cache: false
       - if: inputs.source
+        env:
+          MISE_LOCKED: "1"
+          MISE_ENABLE_TOOLS: rust,mr-boxington,zig
         run: mise run build:cli
-      # The key lives in Infisical as sweepies-ops-private-key (project
-      # INFISICAL_PROJECT_ID, environment prod), read by the machine identity
-      # INFISICAL_IDENTITY_ID, which must allow this repository's main branch.
-      - uses: Infisical/secrets-action@v1.0.18
-        with:
-          method: oidc
-          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
-          project-id: ${{ vars.INFISICAL_PROJECT_ID }}
-          env-slug: prod
-          secret-name: sweepies-ops-private-key
-      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
-        id: app
-        with:
-          client-id: ${{ vars.PATCHULA_CLIENT_ID }}
-          # The Infisical action exports the secret under its own name.
-          private-key: ${{ env['sweepies-ops-private-key'] }}
-          # The permissions the App is created with; see the server guide.
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-workflows: write
-          permission-checks: read
-          permission-statuses: read
+      - name: Lease the App token
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          MISE_LOCKED: "1"
+          MISE_ENABLE_TOOLS: nu,gh
+          # Workflow commands (masks, GITHUB_ENV) reach the runner unprefixed.
+          MISE_TASK_OUTPUT: interleave
+        run: mise run openbao:lease --role count-patchula-self --github count-patchula-self:PATCHULA_APP_TOKEN
       - if: ${{ !inputs.source }}
         uses: sweepies/count-patchula@b78f970fd30690e712159d3d32f313fbf9eaaf81 # v0.9.0
         with:
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ env.PATCHULA_APP_TOKEN }}
       # The action from this commit, running the binary built above.
       - if: inputs.source
         uses: $/
         with:
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ env.PATCHULA_APP_TOKEN }}
           binary: target/release/patchula
+      - name: Revoke the App token and the OpenBao session
+        if: always()
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          MISE_LOCKED: "1"
+          MISE_ENABLE_TOOLS: nu,gh
+          # Workflow commands (masks, GITHUB_ENV) reach the runner unprefixed.
+          MISE_TASK_OUTPUT: interleave
+        run: mise run openbao:lease --revoke

@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-#MISE description="In the release bot's job: merge the release PR when its checks passed and it is on the current main, at most weekly unless --now. Needs GH_TOKEN from release:token"
+#MISE description="In the release bot's job: merge the release PR when its checks passed and it is on the current main, at most weekly unless --now. Needs GH_TOKEN from openbao:lease"
 #MISE tools={gh="2.103.3"}
 #USAGE flag "--now" help="Merge regardless of when the latest release was"
 

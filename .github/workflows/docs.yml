@@ -1,0 +1,99 @@
+name: Docs
+
+# Deploys the documentation site to Cloudflare Workers from main, and uploads
+# every other branch as a preview version under an alias made from the branch
+# name. The job's OIDC token logs in to OpenBao, which leases a short-lived
+# Cloudflare API token: the jwt/ role count-patchula-docs deploys and only this
+# workflow on main can use it; count-patchula-docs-preview only uploads
+# versions and takes pushes to any branch. Revoking the OpenBao session at the
+# end revokes the Cloudflare token with it.
+on:
+  push:
+    branches-ignore:
+      - "patchula/**"
+      - "release-next"
+    paths:
+      - "docs/**"
+      - "Cargo.toml"
+      - "skills/patchula/SKILL.md"
+      - "mise-tasks/docs/**"
+      - "mise.toml"
+      - "tasks.toml"
+      - "mise.lock"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+# A deploy from main always finishes; a newer push to a branch replaces its
+# preview.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  MISE_LOCKED: "1"
+  MISE_ENABLE_TOOLS: node,aube,nu
+  # One task per step, so workflow commands (masks, GITHUB_ENV) reach the runner
+  # unprefixed.
+  MISE_TASK_OUTPUT: interleave
+
+jobs:
+  docs:
+    name: "Docs: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && 'deploy' || 'preview' }}"
+    if: vars.BAO_ADDR != '' && vars.CLOUDFLARE_ACCOUNT_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - id: mise-downloads
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ~/.cache/mise/downloads-cas
+          key: mise-downloads-docs-${{ runner.os }}-${{ hashFiles('mise.lock') }}
+          restore-keys: mise-downloads-docs-${{ runner.os }}-
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          cache: false
+      - name: Lease the deploy token
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+        run: mise run openbao:lease --role count-patchula-docs --cloudflare count-patchula-docs:CLOUDFLARE_API_TOKEN
+      - name: Lease the preview token
+        if: github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch'
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+        run: mise run openbao:lease --role count-patchula-docs-preview --cloudflare count-patchula-docs-preview:CLOUDFLARE_API_TOKEN
+      - name: Deploy
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PUBLIC_DOCSEARCH_APP_ID: ${{ vars.PUBLIC_DOCSEARCH_APP_ID }}
+          PUBLIC_DOCSEARCH_API_KEY: ${{ vars.PUBLIC_DOCSEARCH_API_KEY }}
+          PUBLIC_DOCSEARCH_INDEX_NAME: ${{ vars.PUBLIC_DOCSEARCH_INDEX_NAME }}
+        run: mise run docs:deploy
+      - name: Upload a preview
+        if: github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PUBLIC_DOCSEARCH_APP_ID: ${{ vars.PUBLIC_DOCSEARCH_APP_ID }}
+          PUBLIC_DOCSEARCH_API_KEY: ${{ vars.PUBLIC_DOCSEARCH_API_KEY }}
+          PUBLIC_DOCSEARCH_INDEX_NAME: ${{ vars.PUBLIC_DOCSEARCH_INDEX_NAME }}
+        run: mise run docs:preview --branch "$GITHUB_REF_NAME" --summary "$GITHUB_STEP_SUMMARY"
+      - if: github.ref == 'refs/heads/main' && steps.mise-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        continue-on-error: true
+        with:
+          path: ~/.cache/mise/downloads-cas
+          key: mise-downloads-docs-${{ runner.os }}-${{ hashFiles('mise.lock') }}
+      - name: Revoke the OpenBao session
+        if: always()
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+        run: mise run openbao:lease --revoke

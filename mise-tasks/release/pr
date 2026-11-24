@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-#MISE description="In the release bot's job: keep the release PR (branch release-next) at the next version for a commit on main that passed CI, or close it when nothing is left to release. Needs GH_TOKEN from release:token"
+#MISE description="In the release bot's job: keep the release PR (branch release-next) at the next version for a commit on main that passed CI, or close it when nothing is left to release. Needs GH_TOKEN from openbao:lease"
 #MISE tools={gh="2.103.3"}
 #USAGE arg "<commit>" help="A commit on main that passed CI"
 

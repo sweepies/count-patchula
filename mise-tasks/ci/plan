@@ -32,7 +32,8 @@ const DOCS_TASKS = ["docs:install" "docs:dev" "docs:build" "docs:deploy" "docs:u
 const IGNORED_PREFIXES = [
   "assets/" ".claude/" "image/" "mise-tasks/image/" "mise-tasks/release/"
   "mise-tasks/action/" "mise-tasks/benchmarks/" "mise-tasks/github/"
-  "mise-tasks/registry/" "mise-tasks/server/" "tests/action/" "skills/" ".github/"
+  "mise-tasks/openbao/" "mise-tasks/registry/" "mise-tasks/server/"
+  "tests/action/" "skills/" ".github/"
 ]
 const IGNORED_FILES = [
   README.md AGENTS.md CLAUDE.md LICENSE .gitignore socket.yml communique.toml

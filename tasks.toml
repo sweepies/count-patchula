@@ -102,7 +102,7 @@ env = { PATCHULA_RECORD = "1" }
 run = ["cargo test --workspace --locked", "mise run fixtures:check"]
 
 ["release:notes"]
-description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY (Infisical, environment prod)"
+description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY, which the release workflow leases from OpenBao"
 usage = 'arg "<tag>" help="Release tag, such as v0.1.0"'
 tools = { communique = "1.8.0" }
 run = 'communique generate "${usage_tag?}" --github-release'
@@ -131,12 +131,9 @@ sources = ["src/**/*", "public/**/*", "astro.config.mjs", "package.json", "aube-
 outputs = ["dist/**/*"]
 run = "aube run build"
 
-# Workers Builds (Cloudflare, script `count-patchula`) runs the build command
-# `curl -fsSL https://mise.run | sh && ~/.local/bin/mise trust` and then, on
-# `main`, `MISE_LOCKED=1 MISE_ENABLE_TOOLS=node,aube ~/.local/bin/mise run
-# docs:deploy`, or on any other branch the same with `docs:upload`. These are
-# set in the dashboard; keep them in step with this note.
-
+# .github/workflows/docs.yml runs docs:deploy on main and docs:preview, which
+# runs docs:upload, on other branches, with a short-lived Cloudflare token
+# leased from OpenBao.
 ["docs:deploy"]
 description = "Deploy the built site to Cloudflare Workers; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
 depends = ["docs:build"]
@@ -145,11 +142,12 @@ tools = { node = "26.13.0", aube = "2.9.0" }
 run = "aube exec wrangler deploy"
 
 ["docs:upload"]
-description = "Upload the built site as a Cloudflare preview version, without deploying it; Workers Builds runs this for pull request branches"
+description = "Upload the built site as a Cloudflare preview version, without deploying it; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
+usage = 'flag "--preview-alias <alias>" help="Preview alias for the uploaded version"'
 depends = ["docs:build"]
 dir = "docs"
 tools = { node = "26.13.0", aube = "2.9.0" }
-run = "aube exec wrangler versions upload"
+run = 'aube exec wrangler versions upload {% if usage.preview_alias %}--preview-alias "{{ usage.preview_alias }}"{% endif %}'
 
 ["corpus:snapshot"]
 description = "Regenerate tests/corpus-extraction.tsv and tests/corpus-proposals.tsv after an intended change"
