@@ -27,14 +27,18 @@ impl Transport for Routes {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
         Box::pin(async move {
             let url = request.url().as_str().to_owned();
-            // Off GitHub, only the anonymous registry token below is sent.
+            // Off GitHub, only OCI registry endpoints carry the anonymous pull token.
             if request.url().host_str() != Some("api.github.com") {
-                assert!(
-                    request
-                        .headers()
-                        .get("authorization")
-                        .is_none_or(|v| v == "Bearer anonymous-fixture")
-                );
+                if request.url().path().starts_with("/v2/") {
+                    assert!(
+                        request
+                            .headers()
+                            .get("authorization")
+                            .is_none_or(|v| v == "Bearer anonymous-fixture")
+                    );
+                } else {
+                    assert!(request.headers().get("authorization").is_none());
+                }
             }
             self.requests.lock().unwrap().push(url.clone());
             if request.url().path() == "/graphql" {
