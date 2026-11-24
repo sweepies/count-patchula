@@ -9,7 +9,8 @@ name: Release bot
 #
 # The bot acts as the sweepies-ops App, with a token leased from OpenBao: the
 # job's OIDC token logs in to the jwt/ role count-patchula-release, which only
-# this workflow on main can use. Each step is a mise task in mise-tasks/release.
+# this workflow on main can use (mise-tasks/openbao/lease). Each other step is a
+# mise task in mise-tasks/release.
 on:
   # zizmor: ignore[dangerous-triggers] the job runs only for a successful CI run
   # on a push to main in this repository, and checks out that commit.
@@ -64,7 +65,7 @@ jobs:
       - name: Lease the App token
         env:
           BAO_ADDR: ${{ vars.BAO_ADDR }}
-        run: mise run release:token
+        run: mise run openbao:lease --role count-patchula-release --github count-patchula-release:GH_TOKEN
       - name: Tag a merged release
         if: github.event_name == 'workflow_run'
         run: mise run release:tag "$COMMIT"
@@ -81,4 +82,4 @@ jobs:
         if: always()
         env:
           BAO_ADDR: ${{ vars.BAO_ADDR }}
-        run: mise run release:token --revoke
+        run: mise run openbao:lease --revoke

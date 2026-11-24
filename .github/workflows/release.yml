@@ -260,30 +260,39 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "$GITHUB_REF_NAME" --draft=false
-      # The Anthropic key lives in Infisical as anthropic-api-key (project
-      # INFISICAL_PROJECT_ID, environment prod), read through GitHub OIDC by a machine identity
-      # bound to tag refs. Until both repository variables are set, the
-      # release keeps GitHub's generated notes.
-      - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
-        uses: Infisical/secrets-action@v1.0.18
-        with:
-          method: oidc
-          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
-          project-id: ${{ vars.INFISICAL_PROJECT_ID }}
-          env-slug: prod
-          secret-name: anthropic-api-key
-      - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
+      # communique rewrites the notes with an Anthropic key leased from
+      # OpenBao: the job's OIDC token logs in to the jwt/ role
+      # count-patchula-notes, which only this workflow on a v* tag can use.
+      # Until BAO_ADDR is set, the release keeps GitHub's generated notes.
+      - if: vars.BAO_ADDR != ''
         uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        env:
+          MISE_ENABLE_TOOLS: nu
         with:
-          install: false
           # A release never restores a cache, so nothing cached reaches the artifacts.
           cache: false
+      - name: Lease the Anthropic key
+        if: vars.BAO_ADDR != ''
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          MISE_LOCKED: "1"
+          MISE_ENABLE_TOOLS: nu
+          # Workflow commands (masks, GITHUB_ENV) reach the runner unprefixed.
+          MISE_TASK_OUTPUT: interleave
+        run: mise run openbao:lease --role count-patchula-notes --read op/field/dev/f7p5obq72naltygtbjndd3yrla/credential:ANTHROPIC_API_KEY:value
       - name: Write the release notes
-        if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
+        if: vars.BAO_ADDR != ''
         env:
           # Only the release tool, not the workspace toolchains.
           MISE_ENABLE_TOOLS: communique
           GITHUB_TOKEN: ${{ github.token }}
-          # The action exports the secret under its Infisical name.
-          ANTHROPIC_API_KEY: ${{ env['anthropic-api-key'] }}
+        # ANTHROPIC_API_KEY comes from GITHUB_ENV.
         run: mise run release:notes "$GITHUB_REF_NAME"
+      - name: Revoke the OpenBao session
+        if: always() && vars.BAO_ADDR != ''
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+          MISE_LOCKED: "1"
+          MISE_ENABLE_TOOLS: nu
+          MISE_TASK_OUTPUT: interleave
+        run: mise run openbao:lease --revoke

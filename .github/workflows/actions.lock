@@ -20,12 +20,13 @@ workflows:
         - 'github/codeql-action@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea'
         - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
         - 'jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd'
-    '.github/workflows/patchula.yml':
-        - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
+    '.github/workflows/docs.yml':
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
-        - 'actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc'
-        - 'infisical/secrets-action@v1.0.18'
+        - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
+    '.github/workflows/patchula.yml':
+        - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
+        - 'actions/checkout@v7.0.1'
         - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
         - 'sweepies/count-patchula@b78f970fd30690e712159d3d32f313fbf9eaaf81'
     '.github/workflows/release-bot.yml':
@@ -39,7 +40,6 @@ workflows:
         - 'actions/upload-artifact@v7.0.2'
         - 'docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550'
         - 'docker/setup-qemu-action@v4.4.0'
-        - 'infisical/secrets-action@v1.0.18'
         - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
         - 'jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564'
 dependencies:
@@ -89,11 +89,6 @@ dependencies:
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
-    'actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc':
-        ref: 'v3.4.0'
-        commit: 'sha1-f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc'
-        owner_id: 44036562
-        repo_id: 642580244
     'actions/download-artifact@v8.0.2':
         ref: 'v8.0.2'
         commit: 'sha1-9000827ccba6bdab643e8b6fd33ac0654aef8333'
@@ -119,11 +114,6 @@ dependencies:
         commit: 'sha1-1bd86f2fdb4b86187fa4059f16f31a3202acc9ea'
         owner_id: 9919
         repo_id: 259445878
-    'infisical/secrets-action@v1.0.18':
-        ref: 'v1.0.18'
-        commit: 'sha1-d2e351f16c6ca20d17c85e6c992e04bdeb64e87d'
-        owner_id: 107880645
-        repo_id: 795503506
     'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d':
         ref: 'v5.2.4'
         commit: 'sha1-6be3c7ed4c21d4f76b208d351d95aac273ebb76d'

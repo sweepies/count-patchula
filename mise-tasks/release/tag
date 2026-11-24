@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-#MISE description="In the release bot's job: tag a commit on main that changed the workspace version as v<version>; the tag starts the release workflow. Needs GH_TOKEN from release:token"
+#MISE description="In the release bot's job: tag a commit on main that changed the workspace version as v<version>; the tag starts the release workflow. Needs GH_TOKEN from openbao:lease"
 #MISE tools={gh="2.103.3"}
 #USAGE arg "<commit>" help="A commit on main that passed CI"
 

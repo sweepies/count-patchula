@@ -1,0 +1,140 @@
+#!/usr/bin/env nu
+#MISE description="In a GitHub Actions job: log in to OpenBao with the job's OIDC token under a jwt/ role and export leased credentials to later steps through GITHUB_ENV. --revoke revokes a leased App token and the OpenBao session, which also revokes every lease it holds"
+#MISE tools={gh="2.103.3"}
+#USAGE flag "--role <role>" help="The OpenBao jwt/ auth role to log in with; required unless --revoke"
+#USAGE flag "--github <spec>" help="<permissionset>:<ENV_VAR>: export an App installation token from github/token/<permissionset>"
+#USAGE flag "--cloudflare <spec>" help="<role>:<ENV_VAR>: export a Cloudflare API token from cloudflare/creds/<role>"
+#USAGE flag "--read <spec>" help="<path>:<ENV_VAR>:<field>: export the field data.<field> read from <path>"
+#USAGE flag "--revoke" help="Revoke the App token and the OpenBao session a previous run left"
+
+# The job needs `id-token: write`, and BAO_ADDR, an Actions variable that is
+# also the OIDC audience. Errors never name the address: it stays out of the
+# public logs. Every value is masked before it is saved or exported.
+const SESSION_FILE = "openbao-token"
+const GITHUB_ENV_FILE = "openbao-github-env"
+
+def main [
+  --role: string
+  --github: string
+  --cloudflare: string
+  --read: string
+  --revoke
+] {
+  let temp = $env.RUNNER_TEMP
+  if $revoke {
+    # Best effort: a token that already expired or was revoked needs nothing
+    # more. The App token would otherwise stay valid for its hour.
+    let names = $temp | path join $GITHUB_ENV_FILE
+    if ($names | path exists) {
+      let name = open --raw $names | str trim
+      let token = $env | get -o $name
+      if ($token | is-not-empty) {
+        let revoked = with-env {GH_TOKEN: $token} { ^gh api --method DELETE /installation/token --silent | complete }
+        if $revoked.exit_code != 0 {
+          print $"the App token in ($name) was not revoked: ($revoked.stderr | str trim)"
+        }
+      }
+      rm $names
+    }
+    let file = $temp | path join $SESSION_FILE
+    if ($file | path exists) {
+      let failure = try {
+        bao "post" $"($env.BAO_ADDR)/v1/auth/token/revoke-self" {} (open --raw $file)
+        null
+      } catch {|failure|
+        $failure.msg
+      }
+      if $failure != null {
+        print $"the OpenBao session was not revoked: ($failure)"
+      }
+      rm $file
+    }
+    return
+  }
+  let leases = [
+    (if $github != null {
+      let spec = parse-spec "--github" $github permissionset ENV_VAR
+      {path: $"github/token/($spec.0)" field: token var: $spec.1 github: true}
+    })
+    (if $cloudflare != null {
+      let spec = parse-spec "--cloudflare" $cloudflare role ENV_VAR
+      {path: $"cloudflare/creds/($spec.0)" field: token var: $spec.1 github: false}
+    })
+    (if $read != null {
+      let spec = parse-spec "--read" $read path ENV_VAR field
+      {path: $spec.0 field: $spec.2 var: $spec.1 github: false}
+    })
+  ] | compact
+  if $role == null or ($role | is-empty) {
+    error make --unspanned {msg: "--role is required unless --revoke"}
+  }
+  if ($leases | is-empty) {
+    error make --unspanned {msg: "nothing to lease: pass --github, --cloudflare or --read"}
+  }
+  let address = $env.BAO_ADDR
+  let oidc = oidc-token $address
+  print $"::add-mask::($oidc)"
+  # nu-lint-ignore: check_typed_flag_before_use
+  let session = bao "post" $"($address)/v1/auth/jwt/login" {role: $role jwt: $oidc} null | get auth.client_token
+  print $"::add-mask::($session)"
+  $session | save --force ($temp | path join $SESSION_FILE)
+  for lease in $leases {
+    let value = bao "get" $"($address)/v1/($lease.path)" {} $session | get -o data | get -o $lease.field
+    if ($value | is-empty) or ($value | describe) != "string" {
+      error make --unspanned {msg: $"OpenBao returned no data.($lease.field) for /v1/($lease.path)"}
+    }
+    # A newline would start another GITHUB_ENV entry.
+    if $value =~ "\n" {
+      error make --unspanned {msg: $"data.($lease.field) for /v1/($lease.path) spans lines"}
+    }
+    print $"::add-mask::($value)"
+    $"($lease.var)=($value)\n" | save --append $env.GITHUB_ENV
+    if $lease.github {
+      $lease.var | save --force ($temp | path join $GITHUB_ENV_FILE)
+    }
+    print $"exported /v1/($lease.path) as ($lease.var)"
+  }
+}
+
+# Split a flag's colon-separated spec into its parts, the second always an
+# environment variable name.
+def parse-spec [flag: string, spec: string, ...parts: string]: nothing -> list<string> {
+  let fields = $spec | split row ":"
+  let shape = $parts | str join ":"
+  if ($fields | length) != ($parts | length) or ($fields | any {|field| $field | is-empty }) {
+    error make --unspanned {msg: $"($flag) takes ($shape)"}
+  }
+  if not ($fields.1 =~ '^[A-Za-z_][A-Za-z0-9_]*$') {
+    error make --unspanned {msg: $"($flag): ($fields.1) is not an environment variable name"}
+  }
+  $fields
+}
+
+# The job's OIDC token, with OpenBao's address as its audience.
+def oidc-token [address: string]: nothing -> string {
+  let audience = $address | url encode --all
+  try {
+    http get --headers [Authorization $"Bearer ($env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)"] $"($env.ACTIONS_ID_TOKEN_REQUEST_URL)&audience=($audience)" | get value
+  } catch {
+    error make --unspanned {msg: "could not get the job's OIDC token; the job needs id-token: write"}
+  }
+}
+
+# One OpenBao request. A failure reports the status and path only.
+def bao [method: string, url: string, body: record, session: any]: nothing -> record {
+  let headers = if $session == null { [] } else { [X-Vault-Token $session] }
+  let path = $url | url parse | get path
+  let response = try {
+    if $method == "get" {
+      http get --full --allow-errors --headers $headers $url
+    } else {
+      http post --full --allow-errors --headers $headers --content-type application/json $url $body
+    }
+  } catch {
+    error make --unspanned {msg: $"could not reach OpenBao for ($path)"}
+  }
+  if $response.status >= 300 {
+    error make --unspanned {msg: $"OpenBao answered ($response.status) for ($path)"}
+  }
+  if ($response.body | describe) == "string" { {} } else { $response.body }
+}

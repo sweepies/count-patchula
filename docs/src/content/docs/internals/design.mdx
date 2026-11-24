@@ -150,4 +150,7 @@ so whatever a selective run missed turns up within hours. Caches are plain
 
 This site is Astro Starlight, in `docs/`, served from Cloudflare Workers and
 built from `main` with no per-release versions. `mise run docs:build` builds it
-and `mise run docs:dev` serves it with live reload.
+and `mise run docs:dev` serves it with live reload. `.github/workflows/docs.yml`
+deploys it with `wrangler` on every push to `main` that touches it, and uploads
+other branches as preview versions under an alias made from the branch name,
+each with a short-lived Cloudflare token leased from OpenBao for the job.

@@ -1,0 +1,34 @@
+#!/usr/bin/env nu
+#MISE description="Upload the built documentation site as a Cloudflare preview version under an alias made from a branch name, and print its URL; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
+#MISE tools={node="26.13.0", aube="2.9.0"}
+#USAGE flag "--branch <name>" required=#true help="Branch the preview is for, such as $GITHUB_REF_NAME"
+#USAGE flag "--summary <file>" help="Markdown file to append the preview link to, such as $GITHUB_STEP_SUMMARY"
+
+# The preview URL is <alias>-<worker>.<subdomain>.workers.dev, and its first
+# label is at most 63 characters: 48 for the alias, then -count-patchula.
+const MAX_ALIAS = 48
+
+def main [--branch: string, --summary: string] {
+  if $branch == null or ($branch | is-empty) {
+    error make --unspanned {msg: "--branch is required"}
+  }
+  # nu-lint-ignore: check_typed_flag_before_use
+  let alias = preview-alias $branch
+  ^mise run docs:upload --preview-alias $alias
+  let url = $"https://($alias)-count-patchula.sweepy.workers.dev"
+  print $"Preview URL: ($url)"
+  if ($summary | is-not-empty) {
+    $"### Docs preview\n\n($url)\n" | save --append $summary
+  }
+}
+
+# A DNS label from a branch name: lowercase letters, digits and single dashes.
+def preview-alias [branch: string]: nothing -> string {
+  let alias = $branch
+    | str lowercase
+    | str replace --all --regex '[^a-z0-9]+' "-"
+    | str trim --char "-"
+    | str substring 0..<$MAX_ALIAS
+    | str trim --char "-"
+  if ($alias | is-empty) { "preview" } else { $alias }
+}
