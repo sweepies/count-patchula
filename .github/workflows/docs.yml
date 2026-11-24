@@ -44,6 +44,9 @@ jobs:
     if: vars.BAO_ADDR != '' && vars.CLOUDFLARE_ACCOUNT_ID != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment:
+      name: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && 'docs' || 'docs-preview' }}
+      url: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && 'https://count-patchula.sweepy.dev' || steps.preview.outputs.url }}
     permissions:
       contents: read
       id-token: write
@@ -79,6 +82,7 @@ jobs:
           PUBLIC_DOCSEARCH_INDEX_NAME: ${{ vars.PUBLIC_DOCSEARCH_INDEX_NAME }}
         run: mise run docs:deploy
       - name: Upload a preview
+        id: preview
         if: github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
