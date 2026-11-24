@@ -17,7 +17,6 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/download-artifact@v8.0.2'
         - 'actions/upload-artifact@v7.0.2'
-        - 'dorny/paths-filter@v4.0.3'
         - 'github/codeql-action@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea'
         - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
         - 'jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd'
@@ -115,11 +114,6 @@ dependencies:
         commit: 'sha1-99012661954931238ded8c8b007157a8430204e1'
         owner_id: 5429470
         repo_id: 288487894
-    'dorny/paths-filter@v4.0.3':
-        ref: 'v4.0.3'
-        commit: 'sha1-ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d'
-        owner_id: 1588572
-        repo_id: 265601040
     'github/codeql-action@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea':
         ref: 'v4.39.4'
         commit: 'sha1-1bd86f2fdb4b86187fa4059f16f31a3202acc9ea'

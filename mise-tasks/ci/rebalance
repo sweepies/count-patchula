@@ -1,0 +1,134 @@
+#!/usr/bin/env nu
+#MISE description="Measure each crate's unit-test time from a full CI run and rewrite mise-tasks/ci/crate-timings.tsv, which ci:plan packs the test shards by; needs GH_TOKEN"
+#MISE tools={gh="2.103.3"}
+#USAGE flag "--run <id>" help="The CI run to measure; defaults to the latest successful scheduled or dispatched run with three unit-test shards"
+#USAGE flag "--check" help="Report the shard balance and the proposed weights without rewriting the file"
+
+# A crate's weight is the seconds its test binaries and doc tests report, plus
+# an allowance for linking each test binary: the unit-test binary and one per
+# file in the crate's tests/ directory.
+
+const LINK_SECONDS = 1.5
+const MIN_WEIGHT = 2
+const DEFAULT_WEIGHT = 15
+const SHARDS = 3
+const SHARD_JOB = '^Tests: unit \(shard-\d+\)$'
+
+def main [--run: string, --check] {
+  let root = $env.FILE_PWD | path join ".." ".." | path expand
+  cd $root
+  let file = $root | path join mise-tasks ci crate-timings.tsv
+  let crates = glob crates/*/Cargo.toml | sort | each {|path|
+    let dir = $path | path dirname
+    {name: (open $path | get package.name), bins: (glob ($dir | path join tests "*.rs") | length)}
+  }
+  # default runs the closure only when --run is missing.
+  # nu-lint-ignore: check_typed_flag_before_use
+  let run_id = $run | default { latest-full-run }
+  let jobs = shard-jobs $run_id
+  if ($jobs | length) != $SHARDS {
+    error make --unspanned {msg: $"run ($run_id) has ($jobs | length) unit-test shard jobs, not ($SHARDS)"}
+  }
+  print $"Run ($run_id):"
+  let durations = $jobs | each {|job|
+    let took = ($job.completed_at | into datetime) - ($job.started_at | into datetime)
+    print $"  ($job.name): ($took)"
+    ($took | into int) / 1_000_000_000
+  }
+  print $"  drift \(max/min\): (drift ...$durations)"
+  let seconds = $jobs | each {|job| crate-seconds (^gh api --allow-escape-sequences $"repos/{owner}/{repo}/actions/jobs/($job.id)/logs") } | flatten
+  let old = read-weights $file
+  let new = $crates | each {|crate|
+    let measured = $seconds | where crate == $crate.name | get seconds
+    let weight = if ($measured | is-empty) {
+      print -e $"warning: run ($run_id) ran no tests for ($crate.name); keeping its weight"
+      $old | get --optional $crate.name | default $DEFAULT_WEIGHT
+    } else {
+      [$MIN_WEIGHT (($measured | math sum) + $LINK_SECONDS * (1 + $crate.bins) | math round | into int)] | math max
+    }
+    {crate: $crate.name, weight: $weight}
+  } | sort-by weight crate --reverse
+  let proposed = $new | reduce --fold {} {|row, weights| $weights | insert $row.crate $row.weight }
+  let names = $crates | get name
+  print ""
+  print $"Packed with the current weights: (pack $names $old | str join ' / ') \(drift (drift ...(pack $names $old))\)"
+  print $"Packed with the measured weights: (pack $names $proposed | str join ' / ') \(drift (drift ...(pack $names $proposed))\)"
+  print ""
+  print ($new | each {|row| $row | insert was ($old | get --optional $row.crate) } | table --index false)
+  if not $check {
+    [
+      "# Measured relative weights (seconds of test execution plus integration binary"
+      "# link overhead) that mise-tasks/ci/plan packs unit-test shards by. Not TOML:"
+      "# mise reads every .toml file under mise-tasks as task definitions."
+      "# Refresh with `mise run ci:rebalance` whenever the slowest shard drifts."
+      $"# Baseline: GitHub Actions CI run ($run_id)."
+      ($new | to tsv | str trim)
+    ] | str join "\n" | $in + "\n" | save --force $file
+    print $"Rewrote ($file | path relative-to $root)"
+  }
+}
+
+def latest-full-run [] {
+  let runs = ^gh api "repos/{owner}/{repo}/actions/workflows/ci.yml/runs?status=success&per_page=50" | from json | get workflow_runs
+  let full = $runs | where event in [schedule workflow_dispatch]
+  for candidate in $full {
+    if (shard-jobs ($candidate.id | into string) | length) == $SHARDS {
+      return ($candidate.id | into string)
+    }
+  }
+  error make --unspanned {msg: "no recent successful scheduled or dispatched CI run has three unit-test shards; pass --run"}
+}
+
+def shard-jobs [run: string]: nothing -> table {
+  ^gh api $"repos/{owner}/{repo}/actions/runs/($run)/jobs?per_page=100" | from json | get jobs | where {|job| $job.name =~ $SHARD_JOB }
+}
+
+# The seconds each crate's test binaries report in one job's log. mbx builds
+# each test binary under target/debug/build/<crate>/, and doc tests name the
+# library.
+def crate-seconds [log: string]: nothing -> table {
+  $log
+    | ansi strip
+    | lines
+    | reduce --fold {crate: null, rows: []} {|line, state|
+      let running = $line | parse --regex 'Running .*\(target/debug/build/(?<crate>[^/]+)/'
+      let doc = $line | parse --regex 'Doc-tests (?<lib>\S+)'
+      let result = $line | parse --regex 'test result: .* finished in (?<seconds>[0-9.]+)s'
+      if ($running | is-not-empty) {
+        $state | update crate ($running | first | get crate)
+      } else if ($doc | is-not-empty) {
+        $state | update crate ($doc | first | get lib | str replace --all "_" "-")
+      } else if ($result | is-not-empty) and $state.crate != null {
+        $state | update rows {|it| $it.rows | append {crate: $state.crate, seconds: ($result | first | get seconds | into float)} }
+      } else {
+        $state
+      }
+    }
+    | get rows
+}
+
+def read-weights [path: string]: nothing -> record {
+  open --raw $path
+    | lines
+    | where {|line| not ($line | str starts-with "#") }
+    | str join "\n"
+    | from tsv
+    | reduce --fold {} {|row, weights| $weights | insert $row.crate ($row.weight | into int) }
+}
+
+# The shard totals ci:plan's packing gives every crate under these weights.
+def pack [names: list<string>, weights: record]: nothing -> list<int> {
+  $names
+    | each {|name| {name: $name, weight: ($weights | get --optional $name | default $DEFAULT_WEIGHT)} }
+    | sort-by weight name --reverse
+    | reduce --fold (1..$SHARDS | each { 0 }) {|crate, totals|
+      let lightest = $totals | math min
+      let index = $totals | enumerate | where item == $lightest | first | get index
+      $totals | update $index ($lightest + $crate.weight)
+    }
+}
+
+def drift [...values: number]: nothing -> string {
+  let low = $values | math min
+  if $low <= 0 { "n/a" } else { ($values | math max) / $low | math round --precision 2 | into string }
+}

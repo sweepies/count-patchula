@@ -1,0 +1,26 @@
+# Measured relative weights (seconds of test execution plus integration binary
+# link overhead) that mise-tasks/ci/plan packs unit-test shards by. Not TOML:
+# mise reads every .toml file under mise-tasks as task definitions.
+# Refresh with `mise run ci:rebalance` whenever the slowest shard drifts.
+# Baseline: GitHub Actions CI run 45339665780.
+crate	weight
+patchula-engine	48
+patchula-datasource	46
+patchula-update	26
+patchula-notes	24
+patchula-lookup	20
+patchula-manager	17
+patchula-github	11
+patchula-config	9
+patchula-tools	8
+patchula-server	8
+patchula-testkit	6
+patchula-cli	6
+patchula-process	5
+patchula-http	4
+patchula-cache	4
+patchula-mise	3
+patchula-lockfiles	3
+patchula-words	2
+patchula-versioning	2
+patchula-report	2
