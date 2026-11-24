@@ -217,6 +217,10 @@ jobs:
           restore-keys: *cargo-downloads-restore
       - uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd # v1.7.4
         continue-on-error: true
+        env:
+          # A fixture-scan-only push restores the CLI build's bundle read-only
+          # so it does not overwrite the full build cache with a partial one.
+          ACTIONS_CACHE_MODE: ${{ needs.changes.outputs.build_cli != 'true' && 'read' || '' }}
         with:
           backend: github
           github-cache-mode: objects
@@ -242,8 +246,8 @@ jobs:
         run: mise run fixtures:check
 
   # Each shard tests the crates ci:plan packed into it. A full run's shards
-  # keep the same crates, so each has its own objects cache; a selective run
-  # restores a full shard's cache and saves to a shared partial one instead.
+  # keep the same crates, so each publishes its own objects cache; a selective
+  # run restores that shard's bundle read-only instead of overwriting it.
   test:
     name: "Tests: unit (${{ matrix.shard.shard }})"
     needs: changes
@@ -277,14 +281,17 @@ jobs:
           restore-keys: *cargo-downloads-restore
       - uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd # v1.7.4
         continue-on-error: true
+        env:
+          # Selective runs restore the shard's full bundle read-only so a
+          # partial push to main neither overwrites it nor saves an unused
+          # partial bundle.
+          ACTIONS_CACHE_MODE: ${{ !matrix.shard.full && 'read' || '' }}
         with:
           backend: github
           github-cache-mode: objects
           isolate-objects-cache: true
           clean-target-before-export: true
-          cache-generation: ${{ matrix.shard.full && format('v5-test-{0}-objects', matrix.shard.shard) || 'v5-test-partial-objects' }}
-          # Empty for a full shard, which keeps the generated prefixes.
-          restore-keys: ${{ !matrix.shard.full && format('linux-x64-mbx-v5-test-{0}-objects-{1}linux-x64-mbx-v5-test-shard-1-objects-', matrix.shard.shard, fromJSON('"\n"')) || '' }}
+          cache-generation: v5-test-${{ matrix.shard.shard }}-objects
           save-on-pull-request: false
           save-on-workflow-dispatch: true
       - run: mise run test:unit --packages "$PACKAGES"
