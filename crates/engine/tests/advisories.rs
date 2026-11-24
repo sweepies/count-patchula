@@ -426,7 +426,7 @@ fn simulated_image(
     let get = |path: String, accept: &str, body: &str| Interaction {
         request: RecordedRequest {
             method: "GET".into(),
-            url: format!("https://ghcr.io/v2/{repository}/{path}"),
+            url: format!("https://registry.example/v2/{repository}/{path}"),
             headers: BTreeMap::from([("accept".into(), vec![accept.into()])]),
             body: Body::Text(String::new()),
         },
@@ -472,7 +472,7 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
     let (claims_new, more) = simulated_image("spec/claims", "amd64", &[("zlib", "2")], claim);
     images.extend(more);
     let dockerfile = format!(
-        "FROM ghcr.io/spec/fixed:1.0@{fixed_old}\nFROM ghcr.io/spec/claims:1.0@{claims_old}\n"
+        "FROM registry.example/spec/fixed:1.0@{fixed_old}\nFROM registry.example/spec/claims:1.0@{claims_old}\n"
     );
     let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"dockerfile\" }\n";
     let mut interactions = vec![exchange(
@@ -508,7 +508,7 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
     for (repository, new) in [("spec/fixed", &fixed_new), ("spec/claims", &claims_new)] {
         interactions.push(exchange(
             "GET",
-            &format!("https://ghcr.io/v2/{repository}/tags/list?n=1000"),
+            &format!("https://registry.example/v2/{repository}/tags/list?n=1000"),
             &[("accept", "application/json")],
             Body::Text(String::new()),
             200,
@@ -517,7 +517,7 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
         ));
         let mut head = exchange(
             "HEAD",
-            &format!("https://ghcr.io/v2/{repository}/manifests/1.0"),
+            &format!("https://registry.example/v2/{repository}/manifests/1.0"),
             &[(
                 "accept",
                 "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
@@ -589,7 +589,7 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
     );
     let deps = &repo.package_files[0].dependencies;
     let dep = |package: &str| deps.iter().find(|d| d.package == package).unwrap();
-    let fixed = dep("ghcr.io/spec/fixed");
+    let fixed = dep("registry.example/spec/fixed");
     let update = &fixed.updates[0];
     assert_eq!(update.new_digest.as_deref(), Some(fixed_new.as_str()));
     assert_eq!(update.fixes, ["DSA-5999-1"]);
@@ -604,7 +604,7 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
     let advisories = &fixed.metadata.as_ref().unwrap().advisories;
     assert_eq!(advisories.len(), 1);
     assert_eq!(advisories[0].aliases, ["CVE-2026-0001"]);
-    let claims = dep("ghcr.io/spec/claims");
+    let claims = dep("registry.example/spec/claims");
     let update = &claims.updates[0];
     assert_eq!(update.new_digest.as_deref(), Some(claims_new.as_str()));
     assert!(update.fixes.is_empty());
@@ -637,7 +637,7 @@ async fn rebuild_with_many_advisories(
         simulated_image("spec/many", "amd64", &[("openssl", "1")], none.clone());
     let (new, more) = simulated_image("spec/many", "amd64", &[("openssl", "2")], none);
     images.extend(more);
-    let dockerfile = format!("FROM ghcr.io/spec/many:1.0@{old}\n");
+    let dockerfile = format!("FROM registry.example/spec/many:1.0@{old}\n");
     let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"dockerfile\" }\nsecurity { imagePlatforms = new Listing { \"linux/amd64\" } }\n";
     let mut interactions = vec![exchange(
         "POST",
@@ -671,7 +671,7 @@ async fn rebuild_with_many_advisories(
     }
     interactions.push(exchange(
         "GET",
-        "https://ghcr.io/v2/spec/many/tags/list?n=1000",
+        "https://registry.example/v2/spec/many/tags/list?n=1000",
         &[("accept", "application/json")],
         Body::Text(String::new()),
         200,
@@ -680,7 +680,7 @@ async fn rebuild_with_many_advisories(
     ));
     let mut head = exchange(
         "HEAD",
-        "https://ghcr.io/v2/spec/many/manifests/1.0",
+        "https://registry.example/v2/spec/many/manifests/1.0",
         &[(
             "accept",
             "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
@@ -882,7 +882,7 @@ async fn an_osv_failure_marks_the_image_check_unreadable() {
     let (old, mut images) = simulated_image("spec/app", "amd64", &[("zlib", "1")], none.clone());
     let (new, more) = simulated_image("spec/app", "amd64", &[("zlib", "2")], none);
     images.extend(more);
-    let dockerfile = format!("FROM ghcr.io/spec/app:1.0@{old}\n");
+    let dockerfile = format!("FROM registry.example/spec/app:1.0@{old}\n");
     let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"dockerfile\" }\n";
     let mut interactions = vec![exchange(
         "POST",
@@ -916,7 +916,7 @@ async fn an_osv_failure_marks_the_image_check_unreadable() {
     }
     interactions.push(exchange(
         "GET",
-        "https://ghcr.io/v2/spec/app/tags/list?n=1000",
+        "https://registry.example/v2/spec/app/tags/list?n=1000",
         &[("accept", "application/json")],
         Body::Text(String::new()),
         200,
@@ -925,7 +925,7 @@ async fn an_osv_failure_marks_the_image_check_unreadable() {
     ));
     let mut head = exchange(
         "HEAD",
-        "https://ghcr.io/v2/spec/app/manifests/1.0",
+        "https://registry.example/v2/spec/app/manifests/1.0",
         &[(
             "accept",
             "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
@@ -942,7 +942,7 @@ async fn an_osv_failure_marks_the_image_check_unreadable() {
     interactions.push(head);
     let mut head = exchange(
         "HEAD",
-        "https://ghcr.io/v2/spec/app/manifests/1.1",
+        "https://registry.example/v2/spec/app/manifests/1.1",
         &[(
             "accept",
             "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
@@ -1025,7 +1025,7 @@ async fn a_failed_manifest_read_is_a_lookup_failure() {
     let path = dir.path().join("spec.json");
     let none = serde_json::json!({});
     let (old, images) = simulated_image("spec/app", "amd64", &[("zlib", "1")], none);
-    let dockerfile = format!("FROM ghcr.io/spec/app:1.0@{old}\n");
+    let dockerfile = format!("FROM registry.example/spec/app:1.0@{old}\n");
     let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"dockerfile\" }\n";
     let mut interactions = vec![exchange(
         "POST",
@@ -1059,7 +1059,7 @@ async fn a_failed_manifest_read_is_a_lookup_failure() {
     }
     interactions.push(exchange(
         "GET",
-        "https://ghcr.io/v2/spec/app/tags/list?n=1000",
+        "https://registry.example/v2/spec/app/tags/list?n=1000",
         &[("accept", "application/json")],
         Body::Text(String::new()),
         200,
@@ -1069,7 +1069,7 @@ async fn a_failed_manifest_read_is_a_lookup_failure() {
     for (tag, status, digest) in [("1.0", 500, old.as_str()), ("1.1", 500, "")] {
         let mut head = exchange(
             "HEAD",
-            &format!("https://ghcr.io/v2/spec/app/manifests/{tag}"),
+            &format!("https://registry.example/v2/spec/app/manifests/{tag}"),
             &[(
                 "accept",
                 "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",

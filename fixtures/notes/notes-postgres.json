@@ -5,66 +5,6 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/postgres/manifests/18.6",
-        "headers": {
-          "accept": [
-            "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 401,
-        "headers": {
-          "content-length": [
-            "159"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 18:27:38 GMT"
-          ],
-          "docker-distribution-api-version": [
-            "registry/2.0"
-          ],
-          "docker-ratelimit-source": [
-            "38.34.71.254"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000"
-          ],
-          "www-authenticate": [
-            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/postgres:pull\""
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "errors": [
-              {
-                "code": "UNAUTHORIZED",
-                "detail": [
-                  {
-                    "Action": "pull",
-                    "Class": "",
-                    "Name": "library/postgres",
-                    "Type": "repository"
-                  }
-                ],
-                "message": "authentication required"
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
         "url": "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fpostgres%3Apull",
         "headers": {
           "accept": [
@@ -121,7 +61,6 @@
           "value": {
             "access_token": "[REDACTED]",
             "expires_in": 300,
-            "issued_at": "2026-10-15T18:27:38.47443527Z",
             "token": "[REDACTED]"
           }
         }

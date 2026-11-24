@@ -46,6 +46,19 @@ fn response(status: u16, body: &str, headers: &[(&str, &str)]) -> Response {
         stale: None,
     }
 }
+/// Docker Hub's anonymous token for `image`, which a cold read mints first.
+fn hub_token(image: &str) -> (String, Response) {
+    (
+        format!(
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2F{image}%3Apull"
+        ),
+        response(
+            200,
+            r#"{"token":"anonymous-fixture","expires_in":300}"#,
+            &[],
+        ),
+    )
+}
 async fn client(transport: Arc<Steps>, dir: &std::path::Path) -> Client {
     let cache = Cache::open(dir.join("cache.sqlite"), Default::default())
         .await
@@ -74,8 +87,8 @@ async fn client(transport: Arc<Steps>, dir: &std::path::Path) -> Client {
 }
 #[tokio::test]
 async fn lexical_pagination_is_complete_and_conditional_links_survive_304() {
-    let a = "https://ghcr.io/v2/spec/image/tags/list?n=1000";
-    let b = "https://ghcr.io/v2/spec/image/tags/list?n=1000&last=1.0";
+    let a = "https://registry.example/v2/spec/image/tags/list?n=1000";
+    let b = "https://registry.example/v2/spec/image/tags/list?n=1000&last=1.0";
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
             a.into(),
@@ -109,7 +122,7 @@ async fn lexical_pagination_is_complete_and_conditional_links_survive_304() {
             client
                 .lookup(&patchula_config::PackageId::public(
                     Source::Docker,
-                    "ghcr.io/spec/image"
+                    "registry.example/spec/image"
                 ))
                 .await
                 .unwrap()
@@ -146,7 +159,7 @@ async fn rate_limit_and_foreign_pagination_are_explicit() {
         ),
     ] {
         let steps = Arc::new(Steps(Mutex::new(VecDeque::from([(
-            "https://ghcr.io/v2/spec/image/tags/list?n=1000".into(),
+            "https://registry.example/v2/spec/image/tags/list?n=1000".into(),
             response,
         )]))));
         let dir = tempfile::tempdir().unwrap();
@@ -155,7 +168,7 @@ async fn rate_limit_and_foreign_pagination_are_explicit() {
                 .await
                 .lookup(&patchula_config::PackageId::public(
                     Source::Docker,
-                    "ghcr.io/spec/image"
+                    "registry.example/spec/image"
                 ))
                 .await
                 .unwrap_err()
@@ -167,10 +180,11 @@ async fn rate_limit_and_foreign_pagination_are_explicit() {
 
 #[tokio::test]
 async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
-    let tags = "https://registry-1.docker.io/v2/library/spec/tags/list?n=1000";
+    let tags = "https://registry-1.docker.io/v2/library/spec/tags/list?n=50000";
     let manifest = "https://registry-1.docker.io/v2/library/spec/manifests/1.0";
     let digest = format!("sha256:{}", "a".repeat(64));
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        hub_token("spec"),
         (
             tags.into(),
             response(200, r#"{"tags":["1.0"]}"#, &[("etag", "\"tags\"")]),
@@ -243,6 +257,8 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
 async fn zero_remaining_on_success_keeps_digest_heads_and_other_hosts_available() {
     let digest = format!("sha256:{}", "a".repeat(64));
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        hub_token("spec"),
+        hub_token("uncached"),
         (
             "https://registry-1.docker.io/v2/library/spec/manifests/1.0".into(),
             response(
@@ -259,7 +275,7 @@ async fn zero_remaining_on_success_keeps_digest_heads_and_other_hosts_available(
             response(200, "", &[("docker-content-digest", &digest)]),
         ),
         (
-            "https://ghcr.io/v2/spec/image/manifests/1.0".into(),
+            "https://registry.example/v2/spec/image/manifests/1.0".into(),
             response(200, "", &[("docker-content-digest", &digest)]),
         ),
     ]))));
@@ -271,7 +287,7 @@ async fn zero_remaining_on_success_keeps_digest_heads_and_other_hosts_available(
         digest
     );
     sources
-        .registry_digest("ghcr.io/spec/image", "1.0")
+        .registry_digest("registry.example/spec/image", "1.0")
         .await
         .unwrap();
     assert!(steps.0.lock().unwrap().is_empty());
@@ -287,6 +303,7 @@ async fn rate_limited_heads_can_reuse_legacy_get_digests_but_no_store_is_authori
             headers.push(("cache-control", "no-store"));
         }
         let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+            hub_token("spec"),
             (manifest.into(), response(405, "", &[])),
             (manifest.into(), response(200, "{}", &headers)),
             (
@@ -341,7 +358,7 @@ async fn public_helm_index_redirects_use_the_same_https_policy() {
 
 #[tokio::test]
 async fn a_fresh_catalog_clears_stale_provenance_after_a_short_limit() {
-    let tags = "https://ghcr.io/v2/spec/image/tags/list?n=1000";
+    let tags = "https://registry.example/v2/spec/image/tags/list?n=1000";
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
             tags.into(),
@@ -355,33 +372,33 @@ async fn a_fresh_catalog_clears_stale_provenance_after_a_short_limit() {
     sources
         .lookup(&patchula_config::PackageId::public(
             Source::Docker,
-            "ghcr.io/spec/image",
+            "registry.example/spec/image",
         ))
         .await
         .unwrap();
     sources
         .lookup(&patchula_config::PackageId::public(
             Source::Docker,
-            "ghcr.io/spec/image",
+            "registry.example/spec/image",
         ))
         .await
         .unwrap();
     assert!(
         sources
-            .registry_stale("ghcr.io/spec/image")
+            .registry_stale("registry.example/spec/image")
             .await
             .contains_key(&StaleKey::CATALOG)
     );
     sources
         .lookup(&patchula_config::PackageId::public(
             Source::Docker,
-            "ghcr.io/spec/image",
+            "registry.example/spec/image",
         ))
         .await
         .unwrap();
     assert!(
         sources
-            .registry_stale("ghcr.io/spec/image")
+            .registry_stale("registry.example/spec/image")
             .await
             .is_empty()
     );
@@ -430,7 +447,7 @@ async fn concurrent_charts_share_one_compact_index_but_later_calls_revalidate() 
 
 #[tokio::test]
 async fn validator_free_tags_are_compact_and_survive_a_new_client() {
-    let url = "https://ghcr.io/v2/spec/image/tags/list?n=1000";
+    let url = "https://registry.example/v2/spec/image/tags/list?n=1000";
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([(
         url.into(),
         response(200, r#"{"tags":["2.0","1.0"],"unused":"discarded"}"#, &[]),
@@ -440,7 +457,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
         .await
         .lookup(&patchula_config::PackageId::public(
             Source::Docker,
-            "ghcr.io/spec/image",
+            "registry.example/spec/image",
         ))
         .await
         .unwrap();
@@ -448,7 +465,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
         .await
         .lookup(&patchula_config::PackageId::public(
             Source::Docker,
-            "ghcr.io/spec/image",
+            "registry.example/spec/image",
         ))
         .await
         .unwrap();
@@ -752,7 +769,7 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
     .unwrap()
     .representation(&patchula_cache::representation(
         "anonymous-registry-pull-token",
-        2,
+        3,
     ));
     assert!(cache.http_get(&key).await.unwrap().is_none());
     assert!(steps.0.lock().unwrap().is_empty());
@@ -781,8 +798,9 @@ async fn anonymous_pull_tokens_survive_reopen_and_rejected_tokens_are_replaced()
             )],
         )
     };
+    // The first token is minted before the first read; the second after
+    // the registry refuses the first.
     let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
-        (manifest.into(), None, challenge()),
         (
             auth.into(),
             None,
@@ -824,19 +842,8 @@ async fn expired_anonymous_tokens_are_not_reused_between_clients() {
         for _ in 0..2 {
             reads.extend([
                 (
-                    manifest.into(),
-                    None,
-                    response(
-                        401,
-                        "",
-                        &[(
-                            "www-authenticate",
-                            r#"Bearer realm="https://ghcr.io/token""#,
-                        )],
-                    ),
-                ),
-                (
-                    "https://ghcr.io/token?scope=repository%3Aspec%2Fimage%3Apull".into(),
+                    "https://ghcr.io/token?service=ghcr.io&scope=repository%3Aspec%2Fimage%3Apull"
+                        .into(),
                     None,
                     response(
                         200,
@@ -935,7 +942,7 @@ async fn manifest_heads_have_separate_validators_and_fall_back_only_when_needed(
         for _ in 0..3 {
             assert_eq!(
                 client
-                    .registry_digest("ghcr.io/spec/image", "latest")
+                    .registry_digest("registry.example/spec/image", "latest")
                     .await
                     .unwrap(),
                 digest
@@ -983,7 +990,7 @@ async fn a_cosign_attestation_for_another_subject_is_ignored_for_the_sbom_tag() 
         r#"{{"schemaVersion":2,"layers":[{{"mediaType":"text/spdx+json","digest":"{}","size":1}}]}}"#,
         sha(spdx)
     );
-    let base = "https://ghcr.io/v2/spec/image";
+    let base = "https://registry.example/v2/spec/image";
     let tag = |d: &str, suffix: &str| format!("{base}/manifests/{}{suffix}", d.replace(':', "-"));
     let blob = |d: String| format!("{base}/blobs/{d}");
     let manifest = |d: &str| format!("{base}/manifests/{d}");
@@ -1005,11 +1012,13 @@ async fn a_cosign_attestation_for_another_subject_is_ignored_for_the_sbom_tag() 
         ),
         (manifest(&sha(&sbom)), response(200, &sbom, &[])),
         (blob(sha(spdx)), response(200, spdx, &[])),
+        // Asked about with the others, though the platform's SBOM wins.
+        (tag(&digest, ".sbom"), response(404, "", &[])),
     ]))));
     let dir = tempfile::tempdir().unwrap();
     let client = client(steps.clone(), dir.path()).await;
     let found = client
-        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
         .await
         .unwrap();
     let patchula_datasource::ImageSbom::Found(sbom) = found else {
@@ -1025,7 +1034,7 @@ async fn a_cosign_attestation_for_another_subject_is_ignored_for_the_sbom_tag() 
 }
 
 const SPDX_TYPE: &str = "https://spdx.dev/Document";
-const BASE: &str = "https://ghcr.io/v2/spec/image";
+const BASE: &str = "https://registry.example/v2/spec/image";
 
 fn spdx(upstream: &str) -> String {
     format!(
@@ -1064,7 +1073,7 @@ async fn an_sbom_whose_bytes_do_not_match_its_digest_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let client = client(steps.clone(), dir.path()).await;
     let error = client
-        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
         .await
         .unwrap_err();
     assert!(
@@ -1116,7 +1125,7 @@ async fn an_sbom_attestation_is_found_after_a_provenance_attestation() {
     let dir = tempfile::tempdir().unwrap();
     let client = client(steps.clone(), dir.path()).await;
     let found = client
-        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
         .await
         .unwrap();
     let patchula_datasource::ImageSbom::Found(sbom) = found else {
@@ -1147,7 +1156,7 @@ async fn a_single_manifest_is_matched_to_the_platform_its_config_names() {
     let dir = tempfile::tempdir().unwrap();
     let client = client(steps.clone(), dir.path()).await;
     let found = client
-        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
         .await
         .unwrap();
     assert_eq!(
@@ -1180,7 +1189,7 @@ async fn a_cosign_manifest_the_registry_never_names_a_digest_for_is_not_read() {
     let dir = tempfile::tempdir().unwrap();
     let client = client(steps.clone(), dir.path()).await;
     let found = client
-        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
         .await
         .unwrap();
     assert_eq!(found, patchula_datasource::ImageSbom::Missing);
@@ -1192,6 +1201,7 @@ async fn an_official_image_the_mirror_lacks_is_read_from_docker_hub() {
     let index = r#"{"manifests":[{"digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","platform":{"os":"linux","architecture":"s390x"}}]}"#;
     let digest = sha(index);
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        hub_token("debian"),
         (
             format!("https://mirror.gcr.io/v2/library/debian/manifests/{digest}"),
             response(404, "", &[]),
@@ -1346,18 +1356,34 @@ async fn a_realm_off_the_registry_origin_and_port_443_is_refused() {
             "https://gitlab.acme.dev:8443/jwt/auth",
         ),
     ] {
-        let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([(
-            manifest.to_owned(),
-            None,
-            response(
-                401,
-                "",
-                &[(
-                    "www-authenticate",
-                    &format!(r#"Bearer realm="{realm}",service="registry""#),
-                )],
-            ),
-        )]))));
+        // Docker Hub's token is minted before the first read, so the
+        // challenge naming another realm answers that token.
+        let (token, bearer) = if image.starts_with("docker.io/") {
+            let (url, minted) = hub_token("app");
+            (
+                Some((url, None, minted)),
+                Some("Bearer anonymous-fixture".to_owned()),
+            )
+        } else {
+            (None, None)
+        };
+        let steps = Arc::new(AuthSteps(Mutex::new(
+            token
+                .into_iter()
+                .chain([(
+                    manifest.to_owned(),
+                    bearer,
+                    response(
+                        401,
+                        "",
+                        &[(
+                            "www-authenticate",
+                            &format!(r#"Bearer realm="{realm}",service="registry""#),
+                        )],
+                    ),
+                )])
+                .collect(),
+        )));
         let dir = tempfile::tempdir().unwrap();
         assert!(
             auth_client(steps.clone(), dir.path())
@@ -1708,18 +1734,18 @@ async fn a_charts_source_falls_back_to_the_manifest_annotation() {
     let config = r#"{"config":{"Labels":{}},"sources":["not a repository"],"annotations":{}}"#;
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
-            "https://ghcr.io/v2/spec/chart/manifests/1.0.0".into(),
+            "https://registry.example/v2/spec/chart/manifests/1.0.0".into(),
             response(200, &manifest, &[]),
         ),
         (
-            format!("https://ghcr.io/v2/spec/chart/blobs/{digest}"),
+            format!("https://registry.example/v2/spec/chart/blobs/{digest}"),
             response(200, config, &[]),
         ),
     ]))));
     let dir = tempfile::tempdir().unwrap();
     let sources = client(steps.clone(), dir.path()).await;
     let repository = sources
-        .image_source("ghcr.io/spec/chart", "1.0.0")
+        .image_source("registry.example/spec/chart", "1.0.0")
         .await
         .unwrap()
         .unwrap();
@@ -1732,8 +1758,8 @@ async fn a_charts_source_falls_back_to_the_manifest_annotation() {
 /// than reading page 1 again.
 #[tokio::test]
 async fn pagination_back_to_the_first_page_is_a_cycle() {
-    let a = "https://ghcr.io/v2/spec/image/tags/list?n=1000";
-    let b = "https://ghcr.io/v2/spec/image/tags/list?n=1000&last=1.0";
+    let a = "https://registry.example/v2/spec/image/tags/list?n=1000";
+    let b = "https://registry.example/v2/spec/image/tags/list?n=1000&last=1.0";
     // Only one answer per page: a second read of either panics.
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
@@ -1761,10 +1787,398 @@ async fn pagination_back_to_the_first_page_is_a_cycle() {
         .await
         .lookup(&patchula_config::PackageId::public(
             Source::Docker,
-            "ghcr.io/spec/image",
+            "registry.example/spec/image",
         ))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("invalid package"), "{error}");
     assert!(steps.0.lock().unwrap().is_empty());
+}
+
+/// Answers each URL from its own queue after a short delay, logging every
+/// request with its method and authorization, and the most requests that
+/// were ever in flight at once.
+#[derive(Default)]
+struct Logged {
+    answers: Mutex<std::collections::BTreeMap<String, VecDeque<Response>>>,
+    log: Mutex<Vec<(String, String, Option<String>)>>,
+    in_flight: std::sync::atomic::AtomicUsize,
+    peak: std::sync::atomic::AtomicUsize,
+}
+impl Logged {
+    fn new(answers: impl IntoIterator<Item = (String, Response)>) -> Arc<Self> {
+        let logged = Self::default();
+        for (url, response) in answers {
+            logged
+                .answers
+                .lock()
+                .unwrap()
+                .entry(url)
+                .or_default()
+                .push_back(response);
+        }
+        Arc::new(logged)
+    }
+    fn log(&self) -> Vec<(String, String, Option<String>)> {
+        self.log.lock().unwrap().clone()
+    }
+    fn finished(&self) -> bool {
+        self.answers
+            .lock()
+            .unwrap()
+            .values()
+            .all(VecDeque::is_empty)
+    }
+}
+impl Transport for Logged {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        use std::sync::atomic::Ordering;
+        let url = request.url().to_string();
+        self.log.lock().unwrap().push((
+            request.method().to_string(),
+            url.clone(),
+            request
+                .headers()
+                .get("authorization")
+                .map(|v| v.to_str().unwrap().to_owned()),
+        ));
+        let response = self
+            .answers
+            .lock()
+            .unwrap()
+            .get_mut(&url)
+            .and_then(VecDeque::pop_front)
+            .unwrap_or_else(|| panic!("unexpected network read: {url}"));
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+        Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(response)
+        })
+    }
+}
+
+const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+/// A cold read on Docker Hub or GHCR asks the token service those
+/// registries always name before the registry, instead of after a 401, and
+/// concurrent reads of one image share the token. An operator mirror of
+/// Docker Hub changes neither where the read goes nor where the token
+/// comes from: container registries are never mirrored.
+#[tokio::test]
+async fn cold_docker_hub_and_ghcr_reads_mint_one_token_before_the_first_read() {
+    let mirror =
+        patchula_http::Credential::new("https://mirror.example", patchula_http::Auth::Anonymous)
+            .unwrap()
+            .mirroring("https://registry-1.docker.io")
+            .unwrap();
+    for (package, token, base, credentials) in [
+        (
+            "spec",
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fspec%3Apull",
+            "https://registry-1.docker.io/v2/library/spec",
+            vec![],
+        ),
+        (
+            "spec",
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fspec%3Apull",
+            "https://registry-1.docker.io/v2/library/spec",
+            vec![mirror.clone()],
+        ),
+        (
+            "ghcr.io/spec/image",
+            "https://ghcr.io/token?service=ghcr.io&scope=repository%3Aspec%2Fimage%3Apull",
+            "https://ghcr.io/v2/spec/image",
+            vec![],
+        ),
+    ] {
+        let digest = || response(200, "", &[("docker-content-digest", DIGEST)]);
+        let logged = Logged::new([
+            (
+                token.to_owned(),
+                response(
+                    200,
+                    r#"{"token":"anonymous-fixture","expires_in":300}"#,
+                    &[],
+                ),
+            ),
+            (format!("{base}/manifests/1.0"), digest()),
+            (format!("{base}/manifests/2.0"), digest()),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+            .await
+            .unwrap();
+        let client = Client::new(
+            patchula_github::Client::with_transport(
+                "offline",
+                cache.clone(),
+                Default::default(),
+                logged.clone(),
+            )
+            .unwrap(),
+            Cached::with_options(
+                cache.clone(),
+                logged.clone(),
+                patchula_http::Options {
+                    credentials,
+                    ..patchula_datasource::http_options()
+                },
+            )
+            .unwrap(),
+            cache,
+        )
+        .with_versions_host(false);
+        let (one, two) = tokio::join!(
+            client.registry_digest(package, "1.0"),
+            client.registry_digest(package, "2.0")
+        );
+        assert_eq!(one.unwrap(), DIGEST);
+        assert_eq!(two.unwrap(), DIGEST);
+        let log = logged.log();
+        assert_eq!(log[0], ("GET".into(), token.into(), None), "{package}");
+        assert_eq!(log.len(), 3, "{log:?}");
+        for (method, _, authorization) in &log[1..] {
+            assert_eq!(method, "HEAD");
+            assert_eq!(authorization.as_deref(), Some("Bearer anonymous-fixture"));
+        }
+        assert!(logged.finished());
+    }
+}
+
+/// A read the cache answers by itself mints no token, even with none left:
+/// a manifest addressed by its digest never changes.
+#[tokio::test]
+async fn a_read_the_cache_answers_mints_no_token() {
+    let token = "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fspec%3Apull";
+    let logged = Logged::new([
+        (
+            token.to_owned(),
+            // Never persisted, so the next client has no token at all.
+            response(
+                200,
+                r#"{"token":"anonymous-fixture","expires_in":300}"#,
+                &[("cache-control", "no-store")],
+            ),
+        ),
+        (
+            format!("https://registry-1.docker.io/v2/library/spec/manifests/{DIGEST}"),
+            response(200, "", &[("docker-content-digest", DIGEST)]),
+        ),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    for _ in 0..2 {
+        let client = auth_client_with_transport(logged.clone(), dir.path()).await;
+        assert_eq!(
+            client.registry_digest("spec", DIGEST).await.unwrap(),
+            DIGEST
+        );
+    }
+    assert_eq!(logged.log().len(), 2);
+    assert!(logged.finished());
+}
+
+/// A token service that fails before the first read fails the read, as it
+/// would after a 401, and the registry is not asked.
+#[tokio::test]
+async fn a_failed_token_before_the_first_read_fails_the_read() {
+    let logged = Logged::new([(
+        "https://ghcr.io/token?service=ghcr.io&scope=repository%3Aspec%2Fimage%3Apull".to_owned(),
+        response(503, "", &[]),
+    )]);
+    let dir = tempfile::tempdir().unwrap();
+    let error = auth_client_with_transport(logged.clone(), dir.path())
+        .await
+        .registry_digest("ghcr.io/spec/image", "1.0")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            patchula_datasource::Error::Http(patchula_http::CacheError::Status(503))
+        ),
+        "{error}"
+    );
+    assert_eq!(logged.log().len(), 1);
+}
+
+async fn auth_client_with_transport(transport: Arc<Logged>, dir: &std::path::Path) -> Client {
+    let cache = Cache::open(dir.join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    Client::new(
+        patchula_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            transport.clone(),
+        )
+        .unwrap(),
+        Cached::with_options(
+            cache.clone(),
+            transport,
+            patchula_datasource::http_options(),
+        )
+        .unwrap(),
+        cache,
+    )
+    .with_versions_host(false)
+}
+
+/// The four cosign tags are asked about at once, and their answers are
+/// taken in the order asking one at a time would: the platform's `.att`,
+/// the index's `.att`, then the `.sbom`s. The first error before an SBOM is
+/// found fails the read; one after it does not matter.
+#[tokio::test]
+async fn cosign_tags_are_asked_about_at_once_and_taken_in_order() {
+    const BASE: &str = "https://registry.example/v2/spec/image";
+    let child = format!("sha256:{}", "c".repeat(64));
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    let statement = serde_json::json!({
+        "_type": "https://in-toto.io/Statement/v0.1",
+        "predicateType": SPDX_TYPE,
+        "subject": [{"name": "image", "digest": {"sha256": "c".repeat(64)}}],
+        "predicate": serde_json::from_str::<serde_json::Value>(&spdx("openssl")).unwrap(),
+    });
+    use base64::Engine as _;
+    let envelope = serde_json::json!({
+        "payloadType": "application/vnd.in-toto+json",
+        "payload": base64::engine::general_purpose::STANDARD.encode(statement.to_string()),
+        "signatures": []
+    })
+    .to_string();
+    let att = format!(
+        r#"{{"schemaVersion":2,"layers":[{{"mediaType":"application/vnd.dsse.envelope.v1+json","digest":"{}","size":1,"annotations":{{"predicateType":"{SPDX_TYPE}"}}}}]}}"#,
+        sha(&envelope)
+    );
+    let document = spdx("curl");
+    let sbom = format!(
+        r#"{{"schemaVersion":2,"layers":[{{"mediaType":"text/spdx+json","digest":"{}","size":1}}]}}"#,
+        sha(&document)
+    );
+    let tag = |d: &str, suffix: &str| format!("{BASE}/manifests/{}{suffix}", d.replace(':', "-"));
+    let named = |manifest: &str| response(200, "", &[("docker-content-digest", &sha(manifest))]);
+    let missing = || response(404, "", &[]);
+    let attestation = || {
+        [
+            (
+                format!("{BASE}/manifests/{}", sha(&att)),
+                response(200, &att, &[]),
+            ),
+            (
+                format!("{BASE}/blobs/{}", sha(&envelope)),
+                response(200, &envelope, &[]),
+            ),
+        ]
+    };
+    let spdx_sbom = || {
+        [
+            (
+                format!("{BASE}/manifests/{}", sha(&sbom)),
+                response(200, &sbom, &[]),
+            ),
+            (
+                format!("{BASE}/blobs/{}", sha(&document)),
+                response(200, &document, &[]),
+            ),
+        ]
+    };
+    use patchula_words::SbomSource::{CosignAtt, CosignSbom};
+    /// The registry's answers, and the SBOM's source or the read's status.
+    type Case = (
+        Vec<(String, Response)>,
+        Result<patchula_words::SbomSource, u16>,
+    );
+    let cases: Vec<Case> = vec![
+        // Both kinds exist: the attestation wins without reading the SBOM.
+        (
+            [
+                (tag(&child, ".att"), named(&att)),
+                (tag(&digest, ".att"), missing()),
+                (tag(&child, ".sbom"), named(&sbom)),
+                (tag(&digest, ".sbom"), missing()),
+            ]
+            .into_iter()
+            .chain(attestation())
+            .collect(),
+            Ok(CosignAtt),
+        ),
+        // No attestation: the platform's SBOM.
+        (
+            [
+                (tag(&child, ".att"), missing()),
+                (tag(&digest, ".att"), missing()),
+                (tag(&child, ".sbom"), named(&sbom)),
+                (tag(&digest, ".sbom"), missing()),
+            ]
+            .into_iter()
+            .chain(spdx_sbom())
+            .collect(),
+            Ok(CosignSbom),
+        ),
+        // An error ahead of the SBOM fails the read.
+        (
+            vec![
+                (tag(&child, ".att"), response(500, "", &[])),
+                (tag(&digest, ".att"), missing()),
+                (tag(&child, ".sbom"), named(&sbom)),
+                (tag(&digest, ".sbom"), missing()),
+            ],
+            Err(500),
+        ),
+        // An error behind the attestation does not.
+        (
+            [
+                (tag(&child, ".att"), named(&att)),
+                (tag(&digest, ".att"), missing()),
+                (tag(&child, ".sbom"), missing()),
+                (tag(&digest, ".sbom"), response(500, "", &[])),
+            ]
+            .into_iter()
+            .chain(attestation())
+            .collect(),
+            Ok(CosignAtt),
+        ),
+    ];
+    for (answers, expected) in cases {
+        let logged = Logged::new(
+            [(
+                format!("{BASE}/manifests/{digest}"),
+                response(200, &index, &[]),
+            )]
+            .into_iter()
+            .chain(answers),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let result = auth_client_with_transport(logged.clone(), dir.path())
+            .await
+            .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
+            .await;
+        match (result, expected) {
+            (Ok(patchula_datasource::ImageSbom::Found(sbom)), Ok(source)) => {
+                assert_eq!(sbom.source, source);
+            }
+            (
+                Err(patchula_datasource::Error::Http(patchula_http::CacheError::Status(status))),
+                Err(expected),
+            ) => assert_eq!(status, expected),
+            (result, expected) => panic!("{result:?} for {expected:?}"),
+        }
+        assert!(logged.finished());
+        assert!(
+            logged.peak.load(std::sync::atomic::Ordering::SeqCst) >= 4,
+            "the cosign tags were asked one at a time"
+        );
+        let heads: Vec<String> = logged
+            .log()
+            .into_iter()
+            .filter(|(method, ..)| method == "HEAD")
+            .map(|(_, url, _)| url)
+            .collect();
+        assert_eq!(heads.len(), 4, "{heads:?}");
+    }
 }

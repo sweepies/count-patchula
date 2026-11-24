@@ -3,7 +3,7 @@ use crate::{
     Credential, RequestTrace, Response, Stale, Transport, conditional,
     credentials::{matching, mirrored},
 };
-use patchula_cache::{Cache, HttpEntry, representation};
+use patchula_cache::{Cache, HttpEntry, HttpKey, representation};
 use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
@@ -370,6 +370,21 @@ impl<'a> Access<'a> {
         }
     }
 }
+/// A read before it reaches the network, from `Cached::prepare`.
+struct Prepared {
+    /// Where the read goes, after any mirror.
+    url: Url,
+    /// The operator entry covering `url`.
+    credential: Option<Credential>,
+    key: HttpKey,
+    cached: Option<HttpEntry>,
+    now: i64,
+    /// Seconds until `cached` expires, if it has an expiry.
+    ttl: Option<i64>,
+    /// Whether `cached` must be revalidated whatever its expiry.
+    no_cache: bool,
+    trace: RequestTrace,
+}
 #[derive(Clone)]
 pub struct Cached {
     inner: Arc<Inner>,
@@ -714,14 +729,17 @@ impl Cached {
         self.inner.reads.coalesce(key, fetch, |_| true).await
     }
 
-    async fn get_representation(
+    /// What a read knows before it reaches the network: where it goes, the
+    /// operator entry it carries, and its cache entry with how long that
+    /// entry stays fresh.
+    async fn prepare(
         &self,
         url: &str,
         accept: &str,
         derived: Option<&Derived<Error>>,
         access: Access<'_>,
-        method: Method,
-    ) -> Result<Response, Error> {
+        method: &Method,
+    ) -> Result<Prepared, Error> {
         let url = Url::parse(url).map_err(|_| Error::Configuration)?;
         validate_url(&url)?;
         let registry = access.registry();
@@ -741,15 +759,14 @@ impl Cached {
         {
             crate::tracked::sent();
         }
-        let scope = credential.as_ref().map(Credential::scope);
         let key = conditional::key(
             method.as_str(),
             url.as_str(),
             &[("accept", accept)],
             derived.map(|derived| derived.representation()).as_deref(),
-            scope,
+            credential.as_ref().map(Credential::scope),
         )?;
-        let mut trace = RequestTrace::new(method.as_str(), &url);
+        let trace = RequestTrace::new(method.as_str(), &url);
         let cached = if access.cached() {
             self.inner.cache.http_get(&key).await?
         } else {
@@ -790,19 +807,76 @@ impl Cached {
             },
             ttl,
         );
-        if let Some(entry) = &cached
-            && ttl.is_some_and(|ttl| ttl > 0)
-            && !no_cache
-            && !self.revalidating
-        {
-            self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
-            if entry.status == 404 {
-                return Err(Error::Status(404));
-            }
-            let response = conditional::response(entry).map_err(Error::from)?;
-            trace.fresh(&response);
-            return Ok(response);
+        Ok(Prepared {
+            url,
+            credential,
+            key,
+            cached,
+            now,
+            ttl,
+            no_cache,
+            trace,
+        })
+    }
+
+    /// The answer `prepared`'s cache entry gives without the network, or
+    /// None when the read must ask upstream.
+    fn fresh(&self, prepared: &Prepared) -> Option<Result<Response, Error>> {
+        let entry = prepared.cached.as_ref()?;
+        if !prepared.ttl.is_some_and(|ttl| ttl > 0) || prepared.no_cache || self.revalidating {
+            return None;
         }
+        self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
+        if entry.status == 404 {
+            return Some(Err(Error::Status(404)));
+        }
+        let response = conditional::response(entry).map_err(Error::from);
+        if let Ok(response) = &response {
+            prepared.trace.fresh(response);
+        }
+        Some(response)
+    }
+
+    /// A registry read answered by the cache alone: what a read of `url`
+    /// would return without asking the registry, or None when it would ask.
+    /// It lets a caller skip minting a pull token the read never sends.
+    pub async fn registry_fresh(
+        &self,
+        url: &str,
+        accept: &str,
+        derived: Option<&Derived<Error>>,
+        method: Method,
+    ) -> Result<Option<Response>, Error> {
+        let prepared = self
+            .prepare(url, accept, derived, Access::Registry(None), &method)
+            .await?;
+        self.fresh(&prepared).transpose()
+    }
+
+    async fn get_representation(
+        &self,
+        url: &str,
+        accept: &str,
+        derived: Option<&Derived<Error>>,
+        access: Access<'_>,
+        method: Method,
+    ) -> Result<Response, Error> {
+        let registry = access.registry();
+        let prepared = self.prepare(url, accept, derived, access, &method).await?;
+        if let Some(answer) = self.fresh(&prepared) {
+            return answer;
+        }
+        let Prepared {
+            url,
+            credential,
+            key,
+            cached,
+            now,
+            ttl,
+            no_cache: _,
+            mut trace,
+        } = prepared;
+        let scope = credential.as_ref().map(Credential::scope);
         let mut request = Request::new(method.clone(), url.clone());
         if let Some(Bearer { token, .. }) = access.bearer() {
             let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
@@ -1105,7 +1179,6 @@ mod tests {
         options.host_concurrency.insert("api.github.com".into(), 40);
         assert_eq!(options.github_limit(), 40);
     }
-    use patchula_cache::HttpKey;
 
     struct Revalidate(std::sync::atomic::AtomicUsize);
     impl Transport for Revalidate {

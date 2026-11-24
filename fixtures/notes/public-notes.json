@@ -2990,55 +2990,6 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://ghcr.io/v2/jqlang/jq/manifests/1.8.1",
-        "headers": {
-          "accept": [
-            "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 401,
-        "headers": {
-          "content-length": [
-            "73"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 18:27:14 GMT"
-          ],
-          "www-authenticate": [
-            "Bearer realm=\"https://ghcr.io/token\",service=\"ghcr.io\",scope=\"repository:jqlang/jq:pull\""
-          ],
-          "x-github-edge-region": [
-            "iad"
-          ],
-          "x-github-request-id": [
-            "BD4A:2EEA83:643873:69F637:6AD11B02"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "errors": [
-              {
-                "code": "UNAUTHORIZED",
-                "message": "authentication required"
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
         "url": "https://ghcr.io/token?service=ghcr.io&scope=repository%3Ajqlang%2Fjq%3Apull",
         "headers": {
           "accept": [
@@ -3489,66 +3440,6 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/redis/manifests/7.4.11-alpine",
-        "headers": {
-          "accept": [
-            "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 401,
-        "headers": {
-          "content-length": [
-            "156"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 18:27:16 GMT"
-          ],
-          "docker-distribution-api-version": [
-            "registry/2.0"
-          ],
-          "docker-ratelimit-source": [
-            "38.34.71.254"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000"
-          ],
-          "www-authenticate": [
-            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/redis:pull\""
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "errors": [
-              {
-                "code": "UNAUTHORIZED",
-                "detail": [
-                  {
-                    "Action": "pull",
-                    "Class": "",
-                    "Name": "library/redis",
-                    "Type": "repository"
-                  }
-                ],
-                "message": "authentication required"
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
         "url": "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fredis%3Apull",
         "headers": {
           "accept": [
@@ -3605,7 +3496,6 @@
           "value": {
             "access_token": "[REDACTED]",
             "expires_in": 300,
-            "issued_at": "2026-10-15T18:27:17.198102396Z",
             "token": "[REDACTED]"
           }
         }

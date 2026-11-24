@@ -5,63 +5,6 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/busybox/tags/list?n=1000",
-        "headers": {
-          "accept": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 401,
-        "headers": {
-          "content-length": [
-            "158"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Mon, 26 Oct 2026 04:10:29 GMT"
-          ],
-          "docker-distribution-api-version": [
-            "registry/2.0"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000"
-          ],
-          "www-authenticate": [
-            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/busybox:pull\""
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "errors": [
-              {
-                "code": "UNAUTHORIZED",
-                "detail": [
-                  {
-                    "Action": "pull",
-                    "Class": "",
-                    "Name": "library/busybox",
-                    "Type": "repository"
-                  }
-                ],
-                "message": "authentication required"
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
         "url": "https://registry.gitlab.com/v2/gitlab-org/release-cli/tags/list?n=1000",
         "headers": {
           "accept": [
@@ -182,7 +125,6 @@
           "value": {
             "access_token": "[REDACTED]",
             "expires_in": 300,
-            "issued_at": "2026-10-26T04:10:29.585592844Z",
             "token": "[REDACTED]"
           }
         }
@@ -191,7 +133,7 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/busybox/tags/list?n=1000",
+        "url": "https://registry-1.docker.io/v2/library/busybox/tags/list?n=50000",
         "headers": {
           "accept": [
             "application/json"

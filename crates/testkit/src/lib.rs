@@ -307,6 +307,7 @@ impl Transport for Recorder {
                 _ => Body::read(&response.body).unwrap_or_else(|error| panic!("{error}")),
             };
             self.redactor.body(&mut body);
+            undate_token(&mut body);
             let interaction = Interaction {
                 request: key,
                 response: RecordedResponse {
@@ -323,6 +324,18 @@ impl Transport for Recorder {
             save(&self.path, &cassette, &self.redactor).unwrap_or_else(|error| panic!("{error}"));
             Ok(response)
         })
+    }
+}
+
+/// Drop a registry token answer's `issued_at`. The Count expires a token
+/// from its issue time, so a recorded one would be expired in every replay
+/// and each read would mint again; without it, a replayed token lives from
+/// the replay, as the live one did from the recording.
+fn undate_token(body: &mut Body) {
+    if let Body::Json(serde_json::Value::Object(fields)) = body
+        && (fields.contains_key("token") || fields.contains_key("access_token"))
+    {
+        fields.remove("issued_at");
     }
 }
 

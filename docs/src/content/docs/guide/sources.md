@@ -204,7 +204,10 @@ GitLab instance's `/jwt/auth`, including a self-hosted registry on a port of
 the instance (`gitlab.example.com:5050`). A token service anywhere else is
 refused before any request reaches it. That includes a token service on
 another port of the registry's host, such as `registry:2` with
-cesanta/docker_auth on `:5001`, which therefore does not work.
+cesanta/docker_auth on `:5001`, which therefore does not work. Docker Hub and
+GHCR anonymous tokens are fetched before the first read of an image, rather
+than after the registry refuses it. Docker Hub lists an image's tags in one
+request of up to 50,000; other registries are read 1,000 tags a page.
 Authenticated pulls, Docker Hub's included, use a [private
 registry](#private-registries) entry. When Docker Hub's pull quota runs out,
 manifest reads wait out its window; tag lists and HEAD requests carry on. A

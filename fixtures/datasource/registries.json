@@ -5,63 +5,6 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/hello-world/tags/list?n=1000",
-        "headers": {
-          "accept": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 401,
-        "headers": {
-          "content-length": [
-            "162"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 04:24:35 GMT"
-          ],
-          "docker-distribution-api-version": [
-            "registry/2.0"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000"
-          ],
-          "www-authenticate": [
-            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/hello-world:pull\""
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "errors": [
-              {
-                "code": "UNAUTHORIZED",
-                "detail": [
-                  {
-                    "Action": "pull",
-                    "Class": "",
-                    "Name": "library/hello-world",
-                    "Type": "repository"
-                  }
-                ],
-                "message": "authentication required"
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
         "url": "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fhello-world%3Apull",
         "headers": {
           "accept": [
@@ -118,7 +61,6 @@
           "value": {
             "access_token": "[REDACTED]",
             "expires_in": 300,
-            "issued_at": "2026-10-15T04:24:35.302020154Z",
             "token": "[REDACTED]"
           }
         }
@@ -127,7 +69,7 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/hello-world/tags/list?n=1000",
+        "url": "https://registry-1.docker.io/v2/library/hello-world/tags/list?n=50000",
         "headers": {
           "accept": [
             "application/json"
@@ -172,55 +114,6 @@
               "nanoserver-ltsc2025",
               "nanoserver-sac2016",
               "nanoserver1709"
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://ghcr.io/v2/stefanprodan/charts/podinfo/tags/list?n=1000",
-        "headers": {
-          "accept": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 401,
-        "headers": {
-          "content-length": [
-            "73"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 04:24:36 GMT"
-          ],
-          "www-authenticate": [
-            "Bearer realm=\"https://ghcr.io/token\",service=\"ghcr.io\",scope=\"repository:stefanprodan/charts/podinfo:pull\""
-          ],
-          "x-github-edge-region": [
-            "iad"
-          ],
-          "x-github-request-id": [
-            "D690:B63F1:1141D7C:12AF95E:6AD05583"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "errors": [
-              {
-                "code": "UNAUTHORIZED",
-                "message": "authentication required"
-              }
             ]
           }
         }
@@ -40078,7 +39971,7 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/hello-world/tags/list?n=1000",
+        "url": "https://registry-1.docker.io/v2/library/hello-world/tags/list?n=50000",
         "headers": {
           "accept": [
             "application/json"

@@ -474,23 +474,35 @@ impl Engine {
         let phase = PhaseTrace::new("lookup");
         let started = Instant::now();
         let plan = self.plan_lookups(&mut work, discovery).await?;
-        self.fetch_lookups(&plan, &mut work, &mut lookups, now, sent)
-            .await?;
-        let lookup = scanned.prefetch + micros(started);
-        drop(phase);
-        let phase = PhaseTrace::new("policy.evaluate");
-        let (eval_keys, proposal_cpu_time) =
-            self.evaluate_lookups(&mut work, &lookups, now).await?;
-        drop(phase);
-        let started = Instant::now();
-        let phase = PhaseTrace::new("digest");
-        let hinted_tags = self.resolve_digests(eval_keys, &mut lookups, sent).await?;
-        let digest = micros(started);
-        drop(phase);
+        // Every pinned image's current digest is read whatever the lookup
+        // finds, so those SBOM reads run beside the lookup and digest
+        // stages; the image stage reads only what they leave.
+        let current_reads = current_sbom_reads(&work);
+        let current_sboms = self.read_sboms(current_reads.clone(), sent);
+        let prefetch = scanned.prefetch;
+        let stages = async {
+            self.fetch_lookups(&plan, &mut work, &mut lookups, now, sent)
+                .await?;
+            let lookup = prefetch + micros(started);
+            drop(phase);
+            let phase = PhaseTrace::new("policy.evaluate");
+            let (eval_keys, proposal_cpu_time) =
+                self.evaluate_lookups(&mut work, &lookups, now).await?;
+            drop(phase);
+            let started = Instant::now();
+            let phase = PhaseTrace::new("digest");
+            let hinted_tags = self.resolve_digests(eval_keys, &mut lookups, sent).await?;
+            let digest = micros(started);
+            drop(phase);
+            Ok::<_, Error>((lookup, proposal_cpu_time, hinted_tags, digest))
+        };
+        let ((lookup, proposal_cpu_time, hinted_tags, digest), current_sboms) =
+            tokio::try_join!(stages, async { Ok::<_, Error>(current_sboms.await) })?;
         self.save_lookup_hints(&plan, &hinted_tags).await?;
         let started = Instant::now();
         let phase = PhaseTrace::new("image");
-        self.read_images(&work, &mut lookups, sent).await?;
+        self.read_images(&work, &mut lookups, (current_reads, current_sboms), sent)
+            .await?;
         let image = micros(started);
         drop(phase);
         let started = Instant::now();
@@ -1204,12 +1216,41 @@ impl Engine {
         Ok(hinted_tags)
     }
 
+    /// The SBOM of each `(package, digest, platform)` in `reads`, the
+    /// flagged ones read again.
+    async fn read_sboms(
+        &self,
+        reads: BTreeMap<(String, String, String), bool>,
+        sent: &Mutex<BTreeSet<Sent>>,
+    ) -> ImageSboms {
+        let fresh_sources = &self.sources.revalidating();
+        self.read_each(
+            reads,
+            fresh_sources,
+            SBOM_FAN_OUT,
+            false,
+            sent,
+            |sources, (package, digest, platform)| {
+                (Sent::Image(package.clone()), async move {
+                    let result = sources.image_sbom(&package, &digest, &platform).await;
+                    (
+                        (package, digest, platform),
+                        result.map_err(|e| e.to_string()),
+                    )
+                })
+            },
+        )
+        .await
+    }
+
     /// Stage: images — SBOM reads for pinned digests and the OSV
-    /// image-advisory comparison for replacements.
+    /// image-advisory comparison for replacements. `current` holds the
+    /// reads `current_sbom_reads` named and their SBOMs, already read.
     pub(super) async fn read_images(
         &self,
         work: &[Work],
         lookups: &mut Lookups,
+        current: (BTreeMap<(String, String, String), bool>, ImageSboms),
         sent: &Mutex<BTreeSet<Sent>>,
     ) -> Result<()> {
         // Every pinned image's current digest is read, so the dashboard shows a
@@ -1268,26 +1309,13 @@ impl Engine {
                 ));
             }
         }
-        let fresh_sources = &self.sources.revalidating();
-        let read_sboms = |reads: BTreeMap<(String, String, String), bool>| {
-            self.read_each(
-                reads,
-                fresh_sources,
-                SBOM_FAN_OUT,
-                false,
-                sent,
-                |sources, (package, digest, platform)| {
-                    (Sent::Image(package.clone()), async move {
-                        let result = sources.image_sbom(&package, &digest, &platform).await;
-                        (
-                            (package, digest, platform),
-                            result.map_err(|e| e.to_string()),
-                        )
-                    })
-                },
-            )
-        };
-        let mut image_sboms = read_sboms(image_reads).await;
+        // What was read ahead is read again only where a retry wants it
+        // fresh and the read ahead was not.
+        let (current_reads, mut image_sboms) = current;
+        image_reads.retain(|key, revalidate| {
+            !image_sboms.contains_key(key) || (*revalidate && current_reads.get(key) != Some(&true))
+        });
+        image_sboms.extend(self.read_sboms(image_reads, sent).await);
         // An image with none of the configured platforms is read for the first
         // platform its index lists, on every digest of the dependency.
         let mut fallback_reads = BTreeMap::new();
@@ -1311,7 +1339,7 @@ impl Engine {
                 listed.insert(platform);
             }
         }
-        image_sboms.extend(read_sboms(fallback_reads).await);
+        image_sboms.extend(self.read_sboms(fallback_reads, sent).await);
         // A retried image asks OSV for its listings again, as it re-reads
         // its SBOMs and digests.
         let retried_images: BTreeSet<&str> = image_deps
@@ -1358,6 +1386,7 @@ impl Engine {
         let ((image_listing, image_found), osv_failure) = if image_queries_all.is_empty() {
             (Default::default(), None)
         } else {
+            let fresh_sources = &self.sources.revalidating();
             let read = async {
                 let (plain, retried) = tokio::join!(
                     self.sources.advisory_listing(&image_queries),
@@ -1495,6 +1524,32 @@ impl Engine {
             .collect()
             .await
     }
+}
+
+/// The SBOM reads of every pinned image's current digest on its
+/// repository's platforms, flagged where a retry reads them again. They are
+/// known once `plan_lookups` has set each dependency's needs, and are the
+/// first reads `read_images` would make for those digests.
+fn current_sbom_reads(work: &[Work]) -> BTreeMap<(String, String, String), bool> {
+    let mut reads = BTreeMap::new();
+    for repo in work {
+        let (Some(_), Some(config)) = (&repo.evaluator, &repo.config) else {
+            continue;
+        };
+        for dep in &repo.dependencies {
+            let Some(old) = dep.dependency.digest.as_ref().filter(|_| dep.needs.sboms) else {
+                continue;
+            };
+            for platform in &config.security.image_platforms {
+                flagged(
+                    &mut reads,
+                    (dep.package.clone(), old.clone(), platform.clone()),
+                    dep.needs.revalidate,
+                );
+            }
+        }
+    }
+    reads
 }
 
 /// Record that a read for `package` carried credentials.

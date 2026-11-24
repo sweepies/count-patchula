@@ -138,7 +138,7 @@ fn compact_platform(
     .map_err(|_| Document)
 }
 pub(crate) const IMAGE_PLATFORM: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("image-platform", 6, compact_platform);
+    patchula_http::Derived::new("image-platform", 7, compact_platform);
 
 fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String {
     match variant {
@@ -384,7 +384,7 @@ fn compact_sbom(
     serde_json::to_vec(&compact).map_err(|_| Document)
 }
 pub(crate) const SBOM_OS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("sbom-os", 6, compact_sbom);
+    patchula_http::Derived::new("sbom-os", 7, compact_sbom);
 
 /// OSV's ecosystem name for an OS release, when OSV covers it.
 fn ecosystem(kind: &str, namespace: &str, distro: Option<&(String, String)>) -> Option<String> {
@@ -508,69 +508,83 @@ impl Client {
             }
         }
         // cosign attaches by tag. The platform digest comes first, since some
-        // publishers list packages only there.
-        let kinds = [
+        // publishers list packages only there. Every tag is asked about at
+        // once, since most are missing, and the answers are taken in that
+        // order: the first error before an SBOM is found fails the read, as
+        // asking one tag at a time would.
+        let probes: Vec<(SbomSource, &str, String)> = [
             (".att", SbomSource::CosignAtt),
             (".sbom", SbomSource::CosignSbom),
-        ];
-        for (suffix, source) in kinds {
-            for candidate in &candidates {
+        ]
+        .into_iter()
+        .flat_map(|(suffix, source)| {
+            candidates.iter().map(move |candidate| {
                 let tag = format!("{}{suffix}", candidate.replace(':', "-"));
-                let head = match self.registry(host, path, &url(&tag), Read::Head).await {
-                    Ok(head) => head,
-                    Err(Error::Http(patchula_http::CacheError::Status(404))) => continue,
-                    Err(error) => return Err(error),
-                };
-                // The tag moves, but the manifest it names is read by digest,
-                // so a warm run reads it from the cache. A registry that does
-                // not name the digest on HEAD must name it on GET, so that
-                // the manifest is checked either way.
-                let digest_of = |headers: &reqwest::header::HeaderMap| {
-                    headers
-                        .get("docker-content-digest")
-                        .and_then(|v| v.to_str().ok())
-                        .filter(|d| validate_digest(d).is_ok())
-                        .map(str::to_owned)
-                };
-                let manifest = match digest_of(&head.headers) {
-                    Some(named) => {
-                        let response = self
-                            .registry(host, path, &url(&named), Read::Manifest)
-                            .await?;
-                        verified(&response.body, &named)?
-                    }
-                    None => {
-                        let response = self
-                            .registry(host, path, &url(&tag), Read::Manifest)
-                            .await?;
-                        let Some(named) = digest_of(&response.headers) else {
-                            continue;
-                        };
-                        verified(&response.body, &named)?
-                    }
-                };
-                for layer in manifest["layers"].as_array().into_iter().flatten() {
-                    let wanted = if source == SbomSource::CosignAtt {
-                        layer["annotations"]["predicateType"] == SPDX
-                    } else {
-                        layer["mediaType"]
-                            .as_str()
-                            .is_some_and(|t| t.contains("spdx"))
-                    };
-                    if !wanted {
-                        continue;
-                    }
-                    let Some(compact) = self.sbom_blob(host, path, layer).await? else {
-                        continue;
-                    };
-                    let subject = candidate.trim_start_matches("sha256:");
-                    if source == SbomSource::CosignAtt
-                        && !compact.subjects.iter().any(|s| s == subject)
-                    {
-                        continue;
-                    }
-                    return Ok(found(compact, source));
+                (source, candidate.as_str(), tag)
+            })
+        })
+        .collect();
+        let tag_urls: Vec<String> = probes.iter().map(|(_, _, tag)| url(tag)).collect();
+        let heads = futures_util::future::join_all(
+            tag_urls
+                .iter()
+                .map(|tag_url| self.registry(host, path, tag_url, Read::Head)),
+        )
+        .await;
+        for ((source, candidate, tag), head) in probes.into_iter().zip(heads) {
+            let head = match head {
+                Ok(head) => head,
+                Err(Error::Http(patchula_http::CacheError::Status(404))) => continue,
+                Err(error) => return Err(error),
+            };
+            // The tag moves, but the manifest it names is read by digest,
+            // so a warm run reads it from the cache. A registry that does
+            // not name the digest on HEAD must name it on GET, so that
+            // the manifest is checked either way.
+            let digest_of = |headers: &reqwest::header::HeaderMap| {
+                headers
+                    .get("docker-content-digest")
+                    .and_then(|v| v.to_str().ok())
+                    .filter(|d| validate_digest(d).is_ok())
+                    .map(str::to_owned)
+            };
+            let manifest = match digest_of(&head.headers) {
+                Some(named) => {
+                    let response = self
+                        .registry(host, path, &url(&named), Read::Manifest)
+                        .await?;
+                    verified(&response.body, &named)?
                 }
+                None => {
+                    let response = self
+                        .registry(host, path, &url(&tag), Read::Manifest)
+                        .await?;
+                    let Some(named) = digest_of(&response.headers) else {
+                        continue;
+                    };
+                    verified(&response.body, &named)?
+                }
+            };
+            for layer in manifest["layers"].as_array().into_iter().flatten() {
+                let wanted = if source == SbomSource::CosignAtt {
+                    layer["annotations"]["predicateType"] == SPDX
+                } else {
+                    layer["mediaType"]
+                        .as_str()
+                        .is_some_and(|t| t.contains("spdx"))
+                };
+                if !wanted {
+                    continue;
+                }
+                let Some(compact) = self.sbom_blob(host, path, layer).await? else {
+                    continue;
+                };
+                let subject = candidate.trim_start_matches("sha256:");
+                if source == SbomSource::CosignAtt && !compact.subjects.iter().any(|s| s == subject)
+                {
+                    continue;
+                }
+                return Ok(found(compact, source));
             }
         }
         Ok(ImageSbom::Missing)
