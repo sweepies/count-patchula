@@ -17,6 +17,9 @@ def main [--branch: string, --summary: string] {
   ^mise run docs:upload --preview-alias $alias
   let url = $"https://($alias)-count-patchula.sweepy.workers.dev"
   print $"Preview URL: ($url)"
+  if "GITHUB_OUTPUT" in $env {
+    $"url=($url)\n" | save --append $env.GITHUB_OUTPUT
+  }
   if ($summary | is-not-empty) {
     $"### Docs preview\n\n($url)\n" | save --append $summary
   }
