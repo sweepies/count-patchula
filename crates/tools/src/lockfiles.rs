@@ -375,7 +375,7 @@ impl Runner {
                 Ecosystem::Nix => self.flake_lock(context, &jobs).await?,
                 Ecosystem::Apm => self.apm_lock(context).await?,
                 Ecosystem::Actions if work.maintenance => {
-                    let before = collect(&root)?;
+                    let before = collect_off_thread(&root).await?;
                     match self.actions_relock(context, work, &before, &unread).await {
                         Ok(refs) => moved = refs,
                         Err(failure) => {
@@ -389,7 +389,7 @@ impl Runner {
         }
         // Only manifests and lockfiles can enter the API commit. Reject links,
         // unexpected writes and binary output rather than silently publishing it.
-        let generated = collect(&root)?;
+        let generated = collect_off_thread(&root).await?;
         validate_targets(work, config, &generated)?;
         let mut files = BTreeMap::new();
         let all: BTreeSet<_> = baseline.keys().chain(generated.keys()).cloned().collect();
@@ -930,6 +930,14 @@ fn restore(root: &Path, files: &BTreeMap<String, String>) -> Result<(), String> 
         write(root, path, content)?;
     }
     Ok(())
+}
+/// [`collect`] on the blocking pool: a generated tree can hold many files,
+/// and reading them must not stall the runtime's other work.
+async fn collect_off_thread(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    let root = root.to_owned();
+    tokio::task::spawn_blocking(move || collect(&root))
+        .await
+        .map_err(|e| e.to_string())?
 }
 fn collect(root: &Path) -> Result<BTreeMap<String, String>, String> {
     fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<String, String>) -> Result<(), String> {

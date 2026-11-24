@@ -131,7 +131,9 @@ the summary says how long the cache sat unused.
 
 The default 256 MiB budget counts compressed HTTP body bytes. An access clock
 approximates LRU and evicts whole HTTP rows, validators included, until the
-cache fits, also on open after the budget is lowered. The total lives in the
+cache fits, also on open after the budget is lowered. A write within the
+budget takes no write lock for eviction; one over it evicts in a single
+immediate transaction. The total lives in the
 one-row `http_bytes` table, kept by triggers on `http` inside each write's
 transaction (migration 016), so a write compares one row to the budget
 instead of summing the table, and processes sharing the file see one total. Release lists and
@@ -155,7 +157,9 @@ version stays unchecked and the next lookup asks again.
 
 Typed values the Count keeps between runs (hints, extractions, catalog views,
 receipts and the like) live in `state`; the server queue, installations and
-repositories keep their own tables. A state row is one value, keyed by a
+repositories keep their own tables, indexed (migration 018) by the times
+their prunes read and by the claim, priority and availability the next-work
+pick orders by. A state row is one value, keyed by a
 namespace and a canonical-JSON scope. A `State` implementation names its
 `NAMESPACE` and `VERSION`, forming `name@v{VERSION}` (with a dependency
 fingerprint for a code-versioned state, below), and declares the `Scope` struct

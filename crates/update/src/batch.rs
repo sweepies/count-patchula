@@ -5,6 +5,7 @@
 use crate::error::PlanError;
 use crate::markers;
 use crate::{Change, Inventory, Plan, Snapshot, pull_requests};
+use futures_util::stream::{self, StreamExt};
 use patchula_config::{Config, Registry};
 use patchula_github::{
     Client,
@@ -23,6 +24,8 @@ const MAX_GREEN_PROOF_BYTES: usize = 4_096;
 /// Maximum combined serialized byte size of all [`GreenProof`]s on one batch
 /// PR so large batches never push the items marker near GitHub's body limit.
 const MAX_TOTAL_GREEN_PROOF_BYTES: usize = 8_192;
+/// The most batched PRs whose green gates and trees are read at once.
+const PARALLEL_CHECKS: usize = 8;
 
 /// Proof that an item's source PR passed every check on `base`, together with
 /// the exact file-level tree delta that commit tested.
@@ -337,32 +340,39 @@ pub async fn apply(
         repository.default_branch.as_deref(),
     ) {
         let repo = &repository.repository;
-        let mut base_entries: Option<Option<Vec<TreeEntry>>> = None;
-        for item in &mut items {
-            if item.green.is_some() {
-                continue;
-            }
-            let Some(source) = prs.iter().find(|t| {
-                t.pr.state == "open"
-                    && t.pr.head.branch != name
-                    && Some(t.pr.number) == item.number
-                    && pull_requests::marker_update(pull_requests::body(&t.pr)).as_deref()
-                        == Some(item.origin.as_str())
-            }) else {
-                continue;
-            };
-            let Some(source_tree_oid) =
-                eligible_for_green(inventory, source, base_commit, default_branch)
-            else {
-                continue;
-            };
-            // Gathering green proofs is optional: any error fails closed by
-            // omitting the proof so CI runs in full, without blocking writes.
-            let passed =
+        // Every open, owned source PR that may lend its green proof, by
+        // item index.
+        let candidates: Vec<(usize, &pull_requests::Tracked, &str)> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.green.is_none())
+            .filter_map(|(index, item)| {
+                let source = prs.iter().find(|t| {
+                    t.pr.state == "open"
+                        && t.pr.head.branch != name
+                        && Some(t.pr.number) == item.number
+                        && pull_requests::marker_update(pull_requests::body(&t.pr)).as_deref()
+                            == Some(item.origin.as_str())
+                })?;
+                let tree = eligible_for_green(inventory, source, base_commit, default_branch)?;
+                Some((index, source, tree))
+            })
+            .collect();
+        let width = client.concurrency().clamp(1, PARALLEL_CHECKS);
+        // Gathering green proofs is optional: any error fails closed by
+        // omitting the proof so CI runs in full, without blocking writes.
+        // Each PR's gate is independent, so the gates overlap; each still
+        // re-reads its PR after its checks to prove the head did not move.
+        // The futures are collected before they are streamed: a stream that
+        // maps through a closure trips the compiler's `Send` check on the
+        // borrowed items.
+        let gates: Vec<_> = candidates
+            .into_iter()
+            .map(|(index, source, tree)| async move {
                 match crate::automerge::clean_and_green(client, &inventory.actor, repo, &source.pr)
                     .await
                 {
-                    Ok(passed) => passed,
+                    Ok(passed) => passed.then_some((index, source, tree)),
                     Err(error) => {
                         tracing::warn!(
                             target: "patchula_update::batch",
@@ -371,58 +381,77 @@ pub async fn apply(
                             %error,
                             "failed to inspect batched PR checks; omitting green proof"
                         );
-                        continue;
-                    }
-                };
-            if !passed {
-                continue;
-            }
-            if base_entries.is_none() {
-                let fetched = match fetch_commit(client, repo, base_commit).await {
-                    Ok(base_git) => fetch_tree(client, repo, &base_git.tree.sha).await,
-                    Err(error) => Err(error),
-                };
-                base_entries = Some(match fetched {
-                    Ok(tree) => (!tree.truncated).then_some(tree.tree),
-                    Err(error) => {
-                        tracing::warn!(
-                            target: "patchula_update::batch",
-                            repo = %repo,
-                            %error,
-                            "failed to inspect base commit tree; omitting green proofs"
-                        );
                         None
                     }
-                });
-            }
-            let Some(base_tree_entries) = base_entries.as_ref().and_then(|o| o.as_deref()) else {
-                continue;
+                }
+            })
+            .collect();
+        let passed: Vec<(usize, &pull_requests::Tracked, &str)> = stream::iter(gates)
+            .buffer_unordered(width)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        let base_entries = if passed.is_empty() {
+            None
+        } else {
+            let fetched = match fetch_commit(client, repo, base_commit).await {
+                Ok(base_git) => fetch_tree(client, repo, &base_git.tree.sha).await,
+                Err(error) => Err(error),
             };
-            let source_tree = match fetch_tree(client, repo, source_tree_oid).await {
-                Ok(tree) => tree,
+            match fetched {
+                Ok(tree) => (!tree.truncated).then_some(tree.tree),
                 Err(error) => {
                     tracing::warn!(
                         target: "patchula_update::batch",
                         repo = %repo,
-                        pr = source.pr.number,
                         %error,
-                        "failed to inspect batched PR tree; omitting green proof"
+                        "failed to inspect base commit tree; omitting green proofs"
                     );
-                    continue;
+                    None
                 }
-            };
-            if source_tree.truncated {
-                continue;
             }
-            let Some(files) = tree_delta(base_tree_entries, &source_tree.tree) else {
-                continue;
-            };
-            let proof = GreenProof {
-                base: base_commit.to_owned(),
-                files,
-            };
-            if serde_json::to_string(&proof).is_ok_and(|s| s.len() <= MAX_GREEN_PROOF_BYTES) {
-                item.green = Some(proof);
+        };
+        if let Some(base_tree_entries) = base_entries.as_deref() {
+            let reads: Vec<_> = passed
+                .into_iter()
+                .map(|(index, source, tree)| async move {
+                    let source_tree = match fetch_tree(client, repo, tree).await {
+                        Ok(tree) => tree,
+                        Err(error) => {
+                            tracing::warn!(
+                                target: "patchula_update::batch",
+                                repo = %repo,
+                                pr = source.pr.number,
+                                %error,
+                                "failed to inspect batched PR tree; omitting green proof"
+                            );
+                            return None;
+                        }
+                    };
+                    if source_tree.truncated {
+                        return None;
+                    }
+                    let files = tree_delta(base_tree_entries, &source_tree.tree)?;
+                    let proof = GreenProof {
+                        base: base_commit.to_owned(),
+                        files,
+                    };
+                    serde_json::to_string(&proof)
+                        .is_ok_and(|s| s.len() <= MAX_GREEN_PROOF_BYTES)
+                        .then_some((index, proof))
+                })
+                .collect();
+            let proofs: Vec<(usize, GreenProof)> = stream::iter(reads)
+                .buffer_unordered(width)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .flatten()
+                .collect();
+            for (index, proof) in proofs {
+                items[index].green = Some(proof);
             }
         }
         bound_green_proofs(&mut items);

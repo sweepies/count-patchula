@@ -1016,3 +1016,95 @@ fn dashboard_vulnerability_counts_deduplicate_and_note_omissions() {
         "{details}"
     );
 }
+
+/// Records each request's method, path and body, answering a GET with the
+/// dashboard issue as `issue` holds it and anything else with `{}`.
+struct DashboardIssue {
+    issue: String,
+    sent: std::sync::Mutex<Vec<(String, String, String)>>,
+}
+impl patchula_http::Transport for DashboardIssue {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
+        let body = request
+            .body()
+            .and_then(|body| body.as_bytes())
+            .map(|bytes| String::from_utf8(bytes.to_vec()).unwrap())
+            .unwrap_or_default();
+        let method = request.method().to_string();
+        let answer = if method == "GET" {
+            json!({"number":1,"body":self.issue})
+        } else {
+            json!({})
+        };
+        self.sent
+            .lock()
+            .unwrap()
+            .push((method, request.url().path().to_owned(), body));
+        Box::pin(async move {
+            Ok(patchula_http::Response {
+                status: reqwest::StatusCode::OK,
+                headers: Default::default(),
+                body: serde_json::to_vec(&answer).unwrap(),
+                stale: None,
+            })
+        })
+    }
+}
+
+/// A release moves the footer's pinned avatar, and that alone must not
+/// rewrite every repository's otherwise unchanged dashboard; a changed one
+/// is rewritten whole, footer included.
+#[tokio::test]
+async fn a_new_release_alone_does_not_rewrite_an_unchanged_dashboard() {
+    let repo = repository();
+    let body = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
+    let pinned = format!("/count-patchula/v{}/", env!("CARGO_PKG_VERSION"));
+    assert!(body.contains(&pinned) && body.contains(MARKER), "{body}");
+    let older = body.replace(&pinned, "/count-patchula/v0.0.1/");
+    let config = patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
+    let write = async |existing: String| {
+        let cache = patchula_cache::Cache::open(":memory:", Default::default())
+            .await
+            .unwrap();
+        let fake = std::sync::Arc::new(DashboardIssue {
+            issue: existing.clone(),
+            sent: Default::default(),
+        });
+        let github = patchula_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            fake.clone(),
+        )
+        .unwrap();
+        let mut inventory = Inventory {
+            actor: "patchula[bot]".into(),
+            ..Default::default()
+        };
+        inventory.issues = patchula_update::Page::of(vec![
+            serde_json::from_value(json!({"id":"i1","number":1,"title":"t","body":existing,
+                "state":"OPEN","author":{"__typename":"Bot","login":"patchula"}}))
+            .unwrap(),
+        ]);
+        dashboard::reconcile(&github, &cache, &repo, &config, &inventory, body.clone())
+            .await
+            .unwrap();
+        std::mem::take(&mut *fake.sent.lock().unwrap())
+    };
+    assert_eq!(write(older.clone()).await, vec![]);
+    assert_eq!(write(older.replace("\n", "\r\n")).await, vec![]);
+    let sent = write(format!("stale\n{older}")).await;
+    let paths: Vec<_> = sent
+        .iter()
+        .map(|(method, path, _)| (method.as_str(), path.as_str()))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            ("GET", "/repos/demo/app/issues/1"),
+            ("PATCH", "/repos/demo/app/issues/1")
+        ]
+    );
+    let patched: serde_json::Value = serde_json::from_str(&sent[1].2).unwrap();
+    assert_eq!(patched["body"], body.as_str());
+}

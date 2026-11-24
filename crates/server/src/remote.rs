@@ -18,7 +18,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use futures_util::{FutureExt, future::BoxFuture};
+use futures_util::{
+    FutureExt, StreamExt,
+    future::BoxFuture,
+    stream::{self, Stream},
+};
 use patchula_cache::Cache;
 use patchula_config::settings::{Settings, valid_repo};
 use patchula_github::app::App;
@@ -470,10 +474,10 @@ impl Api {
         repositories: &[String],
         settings: &Settings,
     ) -> Result<u64, Reject> {
-        let mut found = None;
-        for repo in repositories {
-            let id = self
-                .0
+        // The lookups overlap; their answers are judged in the request's
+        // order, so the first repository that fails names the rejection.
+        let mut lookups = std::pin::pin!(checked(repositories, |repo| async move {
+            self.0
                 .app
                 .repository_installation(repo)
                 .await
@@ -491,7 +495,11 @@ impl Api {
                         "not-installed",
                         format!("this server does not update {repo}"),
                     )
-                })?;
+                })
+        }));
+        let mut found = None;
+        while let Some(id) = lookups.next().await {
+            let id = id?;
             if found.is_some_and(|found| found != id) {
                 return Err(reject(
                     StatusCode::BAD_REQUEST,
@@ -534,7 +542,10 @@ impl Api {
                 "cannot create installation client",
             )
         })?;
-        for repo in repositories {
+        let client = &client;
+        // The reads overlap; their answers are judged in the request's
+        // order, so the first repository that denies names the rejection.
+        let mut reads = std::pin::pin!(checked(repositories, |repo| async move {
             let permission = match client
                 .get_fresh::<patchula_github::model::CollaboratorPermission>(&format!(
                     "repos/{repo}/collaborators/{login}/permission"
@@ -559,9 +570,33 @@ impl Api {
                     format!("{login} cannot push to {repo}"),
                 ));
             }
+            Ok(())
+        }));
+        while let Some(read) = reads.next().await {
+            read?;
         }
         Ok(())
     }
+}
+
+/// The most GitHub reads one remote-run check has in flight.
+const PARALLEL_CHECKS: usize = 8;
+
+/// `check` of each repository, a few at once, answered in the
+/// repositories' order. A caller that stops at the first failure drops the
+/// reads still in flight.
+fn checked<'a, T, F, Fut>(
+    repositories: &'a [String],
+    check: F,
+) -> impl Stream<Item = Result<T, Reject>> + 'a
+where
+    F: FnMut(&'a str) -> Fut,
+    Fut: std::future::Future<Output = Result<T, Reject>> + 'a,
+{
+    // The futures are collected before they are streamed: a stream that maps
+    // through a closure trips the compiler's `Send` check on the borrows.
+    let checks: Vec<Fut> = repositories.iter().map(String::as_str).map(check).collect();
+    stream::iter(checks).buffered(PARALLEL_CHECKS)
 }
 
 #[cfg(test)]

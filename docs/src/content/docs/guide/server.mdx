@@ -58,8 +58,9 @@ patchula config settings-schema           # print the schema
 patchula config check-settings /etc/patchula/settings.pkl
 ```
 
-Empty allowlists allow everything the App can see. The file is re-read about
-once a second. An invalid edit keeps the last good settings, logs a sanitised
+Empty allowlists allow everything the App can see. The file, and every local
+module it imports, is re-read about once a second, and evaluated again only
+when one of them changed. An invalid edit keeps the last good settings, logs a sanitised
 error and makes `/readyz` fail until it is fixed; a running batch keeps the
 snapshot it started with. A change to the `http` section takes effect at each
 installation's next batch. Every setting is in the [settings

@@ -74,7 +74,9 @@ for PR bodies.
 The issue body is bounded to GitHub's size limit. An unchanged dashboard is not
 rewritten: the Count compares the rendered content with the issue's actual
 body, so ticks and edits are noticed even when his own records say nothing
-changed.
+changed. The footer's avatar names the release that wrote it and is left out
+of the comparison, so a new release alone rewrites no dashboard; the next real
+change brings the footer up to date.
 
 ## Checkboxes
 

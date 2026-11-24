@@ -1302,10 +1302,16 @@ pub async fn restore_inventory(
     // (`restore_write`), every other receipt still holds, and the run
     // takes the write path so the lifecycle's acknowledgement pass can
     // take the banner down wherever it is.
-    let bannered = inventory
-        .pull_requests(&repository.repository)
+    // Only a PR whose body shows a banner is projected to check whose it
+    // is, so a warm run clones none of the others.
+    let bannered = refs
+        .items
         .iter()
-        .any(|p| crate::pr::banner::shown(crate::pull_requests::body(&p.pr)));
+        .flatten()
+        .flat_map(|r| r.associated_pull_requests.items.iter().flatten())
+        .filter(|p| crate::pr::banner::shown(&p.body))
+        .filter_map(crate::pull_requests::tracked_pr)
+        .any(|p| crate::pull_requests::owned_pr(&p.pr, actor, &repository.repository));
     // The filtered walk holds only names under the prefix, so a branch the
     // receipts still name being absent means it was renamed out of the
     // prefix or deleted — GitHub's rename keeps its open pull request,

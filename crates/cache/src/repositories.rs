@@ -69,10 +69,9 @@ impl Cache {
                     .query_map([installation as i64], |r| r.get::<_, String>(0))?
                     .collect::<std::result::Result<Vec<_>, _>>()?
             };
-            for repo in known
-                .iter()
-                .filter(|repo| !listed.iter().any(|(name, _)| name == *repo))
-            {
+            let names: std::collections::HashSet<&str> =
+                listed.iter().map(|(name, _)| name.as_str()).collect();
+            for repo in known.iter().filter(|repo| !names.contains(repo.as_str())) {
                 tx.execute("DELETE FROM server_repositories WHERE repo=?1", [repo])?;
             }
             for (repo, private) in &listed {
