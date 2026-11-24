@@ -3,10 +3,10 @@
 // is drawn against the slower tool, so a bar's length is its share of
 // Renovate's time.
 const rows = [
-  { label: "Warm", patchula: 14.8, renovate: 274.3 },
-  { label: "Cold", patchula: 150.5, renovate: 920.6 },
+  { label: "Warm", patchula: 11.9, renovate: 392.1 },
+  { label: "Cold", patchula: 49.3, renovate: 1351.2 },
 ];
-const seconds = (value: number) => `${value.toFixed(1)} s`;
+const seconds = (value: number) => `${value.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} s`;
 ---
 
 <figure class="speed-bars">
@@ -36,7 +36,7 @@ const seconds = (value: number) => `${value.toFixed(1)} s`;
   }
   <figcaption>
     Six large public repositories, looked up without writing, against
-    Renovate 44.173.1.
+    Renovate 44.261.0.
   </figcaption>
 </figure>
 
@@ -57,7 +57,7 @@ const seconds = (value: number) => `${value.toFixed(1)} s`;
   }
   .bar-row {
     display: grid;
-    grid-template-columns: 4.5rem 1fr 3.75rem;
+    grid-template-columns: 4.5rem 1fr 4.75rem;
     align-items: center;
     gap: 0.5rem;
   }
