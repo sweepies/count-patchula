@@ -1,7 +1,7 @@
 use super::contract::{BaseFile, Ecosystem, Failure, Work};
 use super::{
-    Runner, collect, directory_of_cargo_config, hash, materialized, open_or_create, safe_path,
-    within,
+    Runner, collect_off_thread, directory_of_cargo_config, hash, materialized, open_or_create,
+    safe_path, within,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_github::blob_sha;
@@ -16,6 +16,23 @@ const GIT_OUTPUT_LIMIT: usize = 16 << 20;
 /// The largest Cargo configuration blob read for its registries; a larger
 /// one is skipped.
 const CARGO_CONFIG_LIMIT: usize = 1 << 20;
+
+/// The values `git config --list -z` printed for each key. Git prints the
+/// section and variable names in lower case and keeps a subsection's case;
+/// the keys the checkout sets have lower-case subsections, so the key
+/// lowered is what git printed. A key set more than once keeps every value.
+fn local_config(listed: &[u8]) -> BTreeMap<String, Vec<String>> {
+    let mut config = BTreeMap::<String, Vec<String>>::new();
+    for entry in listed.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let entry = String::from_utf8_lossy(entry);
+        let (key, value) = entry.split_once('\n').unwrap_or((&entry, ""));
+        config
+            .entry(key.to_ascii_lowercase())
+            .or_default()
+            .push(value.to_owned());
+    }
+    config
+}
 
 impl Runner {
     async fn git(
@@ -91,7 +108,8 @@ impl Runner {
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| format!("cannot lock the repository clone: {e}"))?;
-        if !clone.join("HEAD").is_file() {
+        let created = !clone.join("HEAD").is_file();
+        if created {
             self.git(
                 driver,
                 &clone,
@@ -114,6 +132,27 @@ impl Runner {
             return Err("invalid repository".into());
         }
         let url = format!("https://github.com/{repo}.git");
+        // A warm clone keeps what an earlier run configured: read the
+        // clone's own configuration once and set only what differs, rather
+        // than one git run per key on every regeneration.
+        let configured = if created {
+            BTreeMap::new()
+        } else {
+            local_config(
+                &self
+                    .git(
+                        driver,
+                        &clone,
+                        vec![
+                            "config".into(),
+                            "--local".into(),
+                            "--list".into(),
+                            "-z".into(),
+                        ],
+                    )
+                    .await?,
+            )
+        };
         for (key, value) in [
             ("core.repositoryformatversion", "1"),
             ("remote.origin.url", url.as_str()),
@@ -121,6 +160,12 @@ impl Runner {
             ("remote.origin.partialclonefilter", "blob:none"),
             ("extensions.partialClone", "origin"),
         ] {
+            if configured
+                .get(&key.to_ascii_lowercase())
+                .is_some_and(|values| values.len() == 1 && values[0] == value)
+            {
+                continue;
+            }
             self.git(
                 driver,
                 &clone,
@@ -222,7 +267,7 @@ impl Runner {
         }
         self.checkout_paths(driver, &clone, base, root, entries.keys())
             .await?;
-        let files = collect(root)?;
+        let files = collect_off_thread(root).await?;
         let mut baseline = BTreeMap::new();
         for (path, content) in files {
             let (sha, mode) = entries.get(&path).ok_or("unexpected checkout file")?;
@@ -319,5 +364,24 @@ impl Runner {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_config_keeps_every_value_of_each_lowered_key() {
+        let listed = b"core.repositoryformatversion\n1\0remote.origin.url\nhttps://github.com/demo/app.git\0extensions.partialclone\norigin\0remote.origin.fetch\na\0remote.origin.fetch\nb\0core.bare\0";
+        let config = local_config(listed);
+        assert_eq!(config["core.repositoryformatversion"], ["1"]);
+        assert_eq!(
+            config["remote.origin.url"],
+            ["https://github.com/demo/app.git"]
+        );
+        assert_eq!(config["extensions.partialclone"], ["origin"]);
+        assert_eq!(config["remote.origin.fetch"], ["a", "b"]);
+        assert_eq!(config["core.bare"], [""]);
     }
 }

@@ -5507,3 +5507,117 @@ async fn an_unreadable_closed_branch_protects_its_plan_only() {
     assert_eq!(plans[1].action().status, BranchStatus::Created);
     check_transcript();
 }
+
+/// Counts the pull request reads in flight at once, passing every request
+/// through to the fake.
+struct PullReads {
+    inner: Arc<FakeGitHub>,
+    now: std::sync::atomic::AtomicUsize,
+    most: std::sync::atomic::AtomicUsize,
+}
+impl patchula_http::Transport for PullReads {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let read = request.method() == reqwest::Method::GET
+            && request.url().path().starts_with("/repos/demo/app/pulls/");
+        Box::pin(async move {
+            if read {
+                let now = self.now.fetch_add(1, SeqCst) + 1;
+                self.most.fetch_max(now, SeqCst);
+            }
+            let response = self.inner.send(request).await;
+            if read {
+                self.now.fetch_sub(1, SeqCst);
+            }
+            response
+        })
+    }
+}
+
+/// Banners on several PRs come down together: each PR's fresh read and
+/// body write are its own, so the reads overlap rather than queue, and
+/// every banner still comes down.
+#[tokio::test(start_paused = true)]
+async fn banners_on_several_prs_come_down_together() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let reads = Arc::new(PullReads {
+        inner: server.clone(),
+        now: Default::default(),
+        most: Default::default(),
+    });
+    let github = Client::with_transport(
+        "offline",
+        Cache::open(":memory:", Default::default()).await.unwrap(),
+        Default::default(),
+        reads.clone(),
+    )
+    .unwrap();
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let own = {
+        let mut s = server.state();
+        let prs = &mut s.repo_mut().prs;
+        let own = prs[&1]["body"].as_str().unwrap().to_owned();
+        let bannered = own.replacen(
+            "<!-- patchula-begin -->\n",
+            &format!(
+                "<!-- patchula-begin -->\n{REBASING}\n> [!NOTE]\n> **The Count is sinking his teeth into this branch.**\n> Re-checking against `main`. Hold off merging until this is done.\n<!-- patchula-rebasing-end -->\n\n"
+            ),
+            1,
+        );
+        assert_ne!(bannered, own);
+        for number in 2..=4u64 {
+            let mut pr = prs[&1].clone();
+            pr["number"] = json!(number);
+            pr["node_id"] = json!(format!("PR_{number}"));
+            pr["html_url"] = json!(format!("https://github.com/demo/app/pull/{number}"));
+            // One open PR per branch, or the listing's duplicates close.
+            let branch = format!("{}-{number}", pr["head"]["ref"].as_str().unwrap());
+            pr["head"]["ref"] = json!(branch);
+            prs.insert(number, pr);
+        }
+        for pr in prs.values_mut() {
+            pr["body"] = json!(bannered);
+        }
+        own
+    };
+    reads.most.store(0, std::sync::atomic::Ordering::SeqCst);
+    // A run with a scan warning closes no PR as obsolete, so with no plans
+    // the four PRs are left for the withdrawal alone.
+    let mut warned = repo.clone();
+    warned.warnings.push("fixture: degraded scan".into());
+    let mut state = patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &warned,
+        &mut [],
+        &config,
+        chrono::Utc::now(),
+        patchula_words::Recheck::NextRun,
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    server.state().settings.latency = std::time::Duration::from_millis(100);
+    state.withdraw(&github).await.unwrap();
+    for number in 1..=4u64 {
+        assert_eq!(
+            server.state().repo().prs[&number]["body"].as_str().unwrap(),
+            own,
+            "#{number}"
+        );
+    }
+    assert!(
+        reads.most.load(std::sync::atomic::Ordering::SeqCst) > 1,
+        "the PRs were read one at a time"
+    );
+    check_transcript();
+}

@@ -2,7 +2,7 @@ use crate::{Error, HttpEntry, Opened, Options, Origin, Release, ReleaseList, Res
 
 /// Each migration sets `user_version` to its own number; a cache at version
 /// N runs the ones after it.
-pub(crate) const MIGRATIONS: [&str; 17] = [
+pub(crate) const MIGRATIONS: [&str; 18] = [
     include_str!("migrations/001.sql"),
     include_str!("migrations/002.sql"),
     include_str!("migrations/003.sql"),
@@ -20,6 +20,7 @@ pub(crate) const MIGRATIONS: [&str; 17] = [
     include_str!("migrations/015.sql"),
     include_str!("migrations/016.sql"),
     include_str!("migrations/017.sql"),
+    include_str!("migrations/018.sql"),
 ];
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
@@ -362,30 +363,39 @@ impl Store {
     /// Evict the least recently used HTTP rows until the bodies fit the
     /// budget. The total is the trigger-kept `http_bytes` row (migration
     /// 016), read again after each delete, so no write scans the table and
-    /// a concurrent process's writes count too.
+    /// a concurrent process's writes count too. A cache within budget takes
+    /// no write lock; one over it evicts every row in one transaction,
+    /// immediate so another process's writes wait rather than interleave.
     fn evict(&self) -> Result<u64> {
-        let mut evicted = 0;
-        loop {
-            let total: i64 = self
-                .conn
-                .query_row("SELECT total FROM http_bytes", [], |row| row.get(0))?;
-            if u64::try_from(total).unwrap_or(0) <= self.options.http_body_budget {
-                return Ok(evicted);
-            }
-            let Some(key) = self
-                .conn
-                .query_row(
-                    "SELECT key FROM http ORDER BY last_access,key LIMIT 1",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-            else {
-                return Ok(evicted);
-            };
-            self.conn.execute("DELETE FROM http WHERE key=?1", [key])?;
-            evicted += 1;
+        let over = |conn: &Connection| -> Result<bool> {
+            let total: i64 =
+                conn.query_row("SELECT total FROM http_bytes", [], |row| row.get(0))?;
+            Ok(u64::try_from(total).unwrap_or(0) > self.options.http_body_budget)
+        };
+        if !over(&self.conn)? {
+            return Ok(0);
         }
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let mut evicted = 0;
+        {
+            let mut oldest = tx.prepare("SELECT key FROM http ORDER BY last_access,key LIMIT 1")?;
+            let mut delete = tx.prepare("DELETE FROM http WHERE key=?1")?;
+            while over(&tx)? {
+                let Some(key) = oldest
+                    .query_row([], |row| row.get::<_, String>(0))
+                    .optional()?
+                else {
+                    break;
+                };
+                delete.execute([key])?;
+                evicted += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(evicted)
     }
 
     /// The refresh boundary, without materializing the cached history.

@@ -19,13 +19,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const TITLE: &str = "Count Patchula's dependency dashboard";
 const LIMIT: usize = 60_000;
+/// The footer up to the release the avatar is pinned to, and after it.
+macro_rules! footer_head {
+    () => {
+        "\n---\n\n<p>\n<a href=\"https://count-patchula.sweepy.dev\"><img align=\"left\" src=\"https://raw.githubusercontent.com/sweepies/count-patchula/v"
+    };
+}
+macro_rules! footer_tail {
+    () => {
+        "/assets/logo/bat.svg\" width=\"52\" alt=\"Count Patchula\"></a>\n<strong><a href=\"https://count-patchula.sweepy.dev\">Count Patchula</a></strong> keeps watch over this repository<br>\n<sub>The Count works for free, but if you find him helpful, <a href=\"https://github.com/sponsors/sweepies\">consider supporting his development</a>.</sub><br clear=\"left\">\n</p>\n"
+    };
+}
+const FOOTER_HEAD: &str = footer_head!();
+const FOOTER_TAIL: &str = footer_tail!();
 /// Footer matching the Count's pull request bodies, with the avatar pinned to
 /// the running release.
-const FOOTER: &str = concat!(
-    "\n---\n\n<p>\n<a href=\"https://count-patchula.sweepy.dev\"><img align=\"left\" src=\"https://raw.githubusercontent.com/sweepies/count-patchula/v",
-    env!("CARGO_PKG_VERSION"),
-    "/assets/logo/bat.svg\" width=\"52\" alt=\"Count Patchula\"></a>\n<strong><a href=\"https://count-patchula.sweepy.dev\">Count Patchula</a></strong> keeps watch over this repository<br>\n<sub>The Count works for free, but if you find him helpful, <a href=\"https://github.com/sponsors/sweepies\">consider supporting his development</a>.</sub><br clear=\"left\">\n</p>\n"
-);
+const FOOTER: &str = concat!(footer_head!(), env!("CARGO_PKG_VERSION"), footer_tail!());
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(
@@ -1512,6 +1521,33 @@ pub async fn issue_number(cache: &Cache, repo: &str) -> Option<u64> {
         .ok()?
         .map(|receipt| receipt.number)
 }
+/// The hash of a dashboard body without its footer, whose avatar is pinned
+/// to the release that wrote it: a new release alone never rewrites an
+/// otherwise unchanged dashboard, and a changed one gets the new footer with
+/// its new content. Line endings are normalised as in `body_hash`.
+fn content_hash(body: &str) -> String {
+    let body = body.replace("\r\n", "\n");
+    hash(without_footer(&body).as_bytes())
+}
+/// `body` without a trailing footer of any release.
+fn without_footer(body: &str) -> &str {
+    let Some(rest) = body.strip_suffix(FOOTER_TAIL) else {
+        return body;
+    };
+    let Some(start) = rest.rfind(FOOTER_HEAD) else {
+        return body;
+    };
+    let release = &rest[start + FOOTER_HEAD.len()..];
+    if !release.is_empty()
+        && release
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
+    {
+        &body[..start]
+    } else {
+        body
+    }
+}
 pub async fn reconcile(
     client: &Client,
     cache: &Cache,
@@ -1536,11 +1572,11 @@ pub async fn reconcile(
             .clear_state::<Receipt>(&crate::repository_scope(&repo.repository))
             .await?);
     }
-    let digest = hash(body.as_bytes());
+    let digest = content_hash(&body);
     let number = if let Some(existing) = existing {
         let number = existing.number as u64;
         let current = existing.body.as_str();
-        if crate::pr::body::body_hash(current) != digest {
+        if content_hash(current) != digest {
             // The run's controls were read from `current`, which the
             // early inventory may have sampled a whole extraction ago.
             // Re-read the one issue: a body that moved since is a

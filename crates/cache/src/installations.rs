@@ -2,6 +2,10 @@
 use crate::{Cache, Result};
 use rusqlite::{OptionalExtension, params};
 
+/// Expired mappings, through migration 018's `expires_at` index.
+pub(crate) const PRUNE_INSTALLATIONS: &str =
+    "DELETE FROM server_installations WHERE expires_at<=?1";
+
 #[derive(Clone, Copy)]
 pub struct Mapping {
     pub installation: u64,
@@ -32,7 +36,7 @@ impl Cache {
     ) -> Result<()> {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
-            tx.execute("DELETE FROM server_installations WHERE expires_at<=?1", [now])?;
+            tx.execute(PRUNE_INSTALLATIONS, [now])?;
             tx.execute("INSERT INTO server_installations VALUES (?1,?2,?3,?4) ON CONFLICT(app,target) DO UPDATE SET installation=excluded.installation,expires_at=excluded.expires_at", params![app as i64, target, mapping.installation as i64, mapping.expires_at])?;
             tx.commit()?;
             Ok(())

@@ -1058,6 +1058,37 @@ mod tests {
         assert_eq!(claims[0].work.installation, 1);
         assert_eq!(claims[0].work.priority, Priority::Person);
     }
+    /// The server's periodic scans — pruning delivery IDs and expired
+    /// installation mappings, picking the next installation — read through
+    /// migration 018's indexes rather than every row.
+    #[tokio::test]
+    async fn server_scans_search_by_index() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let plans = cache
+            .call(|store| {
+                let plan = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> crate::Result<String> {
+                    let mut statement = store.conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                    Ok(statement
+                        .query_map(params, |row| row.get::<_, String>(3))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?
+                        .join("\n"))
+                };
+                Ok([
+                    plan(PRUNE_DELIVERIES, &[&0])?,
+                    plan(crate::installations::PRUNE_INSTALLATIONS, &[&0])?,
+                    plan(NEXT_INSTALLATION, &[&0])?,
+                ])
+            })
+            .await
+            .unwrap();
+        for (plan, index) in plans.iter().zip([
+            "server_deliveries_received_at",
+            "server_installations_expires_at",
+            "server_work_next",
+        ]) {
+            assert!(plan.contains(index), "{index}:\n{plan}");
+        }
+    }
     #[tokio::test]
     async fn a_schema_12_queue_migrates_its_work_to_the_sweeps_class() {
         let directory = tempfile::tempdir().unwrap();

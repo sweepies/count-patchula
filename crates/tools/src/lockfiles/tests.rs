@@ -1896,6 +1896,28 @@ async fn real_git_cache_is_reused_and_fetches_new_bases_incrementally_offline() 
             .count(),
         2
     );
+    // The cold run configures the new clone without reading it; the warm
+    // one reads the clone's configuration once and writes only what
+    // differs: the URL, which this executor rewrote to the local source.
+    let config: Vec<_> = calls
+        .iter()
+        .filter_map(|args| {
+            let at = args.iter().position(|a| a == "config")?;
+            args.get(at + 1).cloned()
+        })
+        .collect();
+    assert_eq!(
+        config,
+        [
+            "core.repositoryformatversion",
+            "remote.origin.url",
+            "remote.origin.promisor",
+            "remote.origin.partialclonefilter",
+            "extensions.partialClone",
+            "--local",
+            "remote.origin.url",
+        ]
+    );
     assert!(
         calls
             .iter()

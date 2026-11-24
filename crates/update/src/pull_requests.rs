@@ -7,6 +7,7 @@ use crate::pr::body::{
 };
 use crate::pr::view;
 use chrono::{DateTime, Duration, Utc};
+use futures_util::stream::{self, StreamExt};
 use patchula_config::{Config, PackageId};
 use patchula_github::{Client, model};
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus};
@@ -16,6 +17,8 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const BODY_LIMIT: usize = 32_000;
+/// The most PRs whose rebasing banners are put up or taken down at once.
+const PARALLEL_BANNERS: usize = 8;
 
 #[allow(dead_code)]
 mod auto_merge {
@@ -1044,19 +1047,28 @@ impl Lifecycle {
     /// stopped mid-rebuild, is left as it is. The banner is a courtesy:
     /// a failed write is logged and the rebuild goes on.
     pub async fn announce(&mut self, client: &Client, plans: &[Plan]) {
-        for (open, rebuild) in self.announcements(plans) {
-            let number = open.pr.number;
-            let expected = body(&open.pr).to_owned();
-            match show_banner(
-                client,
-                &self.repo,
-                number,
-                &self.actor,
-                Some(&expected),
-                rebuild,
-            )
-            .await
-            {
+        let (repo, actor) = (self.repo.as_str(), self.actor.as_str());
+        // Each banner is its own PR's read and write, so they overlap; the
+        // results are applied in the announcements' order.
+        // The futures are collected before they are streamed: a stream that
+        // maps through a closure trips the compiler's `Send` check.
+        let writes: Vec<_> = self
+            .announcements(plans)
+            .into_iter()
+            .map(|(open, rebuild)| async move {
+                let number = open.pr.number;
+                let expected = body(&open.pr);
+                let result =
+                    show_banner(client, repo, number, actor, Some(expected), rebuild).await;
+                (number, result)
+            })
+            .collect();
+        let shown: Vec<_> = stream::iter(writes)
+            .buffered(client.concurrency().clamp(1, PARALLEL_BANNERS))
+            .collect()
+            .await;
+        for (number, result) in shown {
+            match result {
                 Ok(Some(shown)) => {
                     self.bannered.insert(number);
                     if let Some(old) = self.prs.iter_mut().find(|p| p.pr.number == number) {
@@ -1114,47 +1126,65 @@ impl Lifecycle {
     /// [`Self::acknowledge`], unticking the boxes when `untick` is set.
     async fn clear(&mut self, client: &Client, untick: bool) -> Result<(), Error> {
         let pending = |pr: &model::PullRequest| untick && checked(pr) || banner::shown(body(pr));
-        let mut first = None;
-        let mut cleared = Vec::new();
-        for pr in &mut self.prs {
-            let number = pr.pr.number;
-            let bannered = self.bannered.contains(&number);
-            // A bannered PR this run's own rewrite already cleared has left
-            // the set; one last seen closed still needs its banner down.
-            if !owned_pr(&pr.pr, &self.actor, &self.repo)
-                || !(pr.pr.state == "open" && pending(&pr.pr) || bannered && pr.pr.state != "open")
-            {
-                continue;
-            }
-            let path = format!("repos/{}/pulls/{number}", self.repo);
-            let result = async {
-                let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
-                if !owned_pr(&fresh, &self.actor, &self.repo) {
-                    return Ok(None);
-                }
-                let text = if fresh.state == "open" && pending(&fresh) {
-                    if untick {
-                        banner::without_banner(&unticked(body(&fresh))).into_owned()
-                    } else {
-                        banner::without_banner(body(&fresh)).into_owned()
+        let (repo, actor) = (self.repo.as_str(), self.actor.as_str());
+        // A bannered PR this run's own rewrite already cleared has left
+        // the set; one last seen closed still needs its banner down.
+        let targets: Vec<(usize, u64, bool)> = self
+            .prs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pr)| {
+                let number = pr.pr.number;
+                let bannered = self.bannered.contains(&number);
+                (owned_pr(&pr.pr, actor, repo)
+                    && (pr.pr.state == "open" && pending(&pr.pr)
+                        || bannered && pr.pr.state != "open"))
+                    .then_some((index, number, bannered))
+            })
+            .collect();
+        // Each PR is its own read and write, so they overlap; every one is
+        // tried, and the results are applied in the listing's order.
+        let writes: Vec<_> = targets
+            .into_iter()
+            .map(|(index, number, bannered)| async move {
+                let path = format!("repos/{repo}/pulls/{number}");
+                let result = async {
+                    let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
+                    if !owned_pr(&fresh, actor, repo) {
+                        return Ok(None);
                     }
-                } else if bannered && banner::shown(body(&fresh)) {
-                    banner::without_banner(body(&fresh)).into_owned()
-                } else {
-                    return Ok(None);
-                };
-                client
-                    .patch::<model::PullRequest>(&path, json!({"body":text}))
-                    .await
-                    .map(Some)
-            }
+                    let text = if fresh.state == "open" && pending(&fresh) {
+                        if untick {
+                            banner::without_banner(&unticked(body(&fresh))).into_owned()
+                        } else {
+                            banner::without_banner(body(&fresh)).into_owned()
+                        }
+                    } else if bannered && banner::shown(body(&fresh)) {
+                        banner::without_banner(body(&fresh)).into_owned()
+                    } else {
+                        return Ok(None);
+                    };
+                    client
+                        .patch::<model::PullRequest>(&path, json!({"body":text}))
+                        .await
+                        .map(Some)
+                }
+                .await;
+                (index, number, result)
+            })
+            .collect();
+        let results: Vec<_> = stream::iter(writes)
+            .buffered(client.concurrency().clamp(1, PARALLEL_BANNERS))
+            .collect()
             .await;
+        let mut first = None;
+        for (index, number, result) in results {
             match result {
                 Ok(Some(written)) => {
                     if !banner::shown(body(&written)) {
-                        cleared.push(number);
+                        self.bannered.remove(&number);
                     }
-                    *pr = Tracked::from(written);
+                    self.prs[index] = Tracked::from(written);
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -1163,9 +1193,6 @@ impl Lifecycle {
                     first.get_or_insert(Error::from(error));
                 }
             }
-        }
-        for number in cleared {
-            self.bannered.remove(&number);
         }
         first.map_or(Ok(()), Err)
     }
