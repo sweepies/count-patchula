@@ -89,14 +89,15 @@ token or toolchain of your own.
 
 ## How fast
 
-Against Renovate 44.173.1 on six large public repositories (mastodon, sentry,
-grafana, monica, jellyfin, kafka), each tool alone on the same c7i.xlarge:
+Against Renovate 44.261.0 on six large public repositories (mastodon, sentry,
+grafana, monica, jellyfin, kafka), each tool alone on the same 4 vCPU VM:
 
 | | Count Patchula | Renovate | |
 |---|---|---|---|
-| All six, cold | **150.5 s** | 920.6 s | 6.1× faster |
-| All six, warm | **14.8 s** | 274.3 s | 18.5× faster |
-| Peak memory, grafana cold | **494 MB** | 3.6 GB | 7.3× less |
+| All six, cold | **49.3 s** | 1,351.2 s | 27.4× faster |
+| All six, warm | **11.9 s** | 392.1 s | 33.0× faster |
+| `grafana/grafana`, cold | **13.3 s** | 954.7 s | 71.9× faster |
+| Peak memory, grafana cold | **247 MB** | 4.1 GB | 17.2× less |
 
 The [benchmarks page](https://count-patchula.sweepy.dev/benchmarks/) has
 the method and every run.
