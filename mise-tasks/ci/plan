@@ -1,0 +1,592 @@
+#!/usr/bin/env nu
+#MISE description="Plan which CI jobs and unit-test shards a change needs from its changed paths; print the plan as JSON (also to GITHUB_OUTPUT)"
+#USAGE flag "--event <event>" default="pull_request" help="The GitHub event; schedule and workflow_dispatch run everything" {
+#USAGE   choices "pull_request" "push" "schedule" "workflow_dispatch"
+#USAGE }
+#USAGE flag "--base <ref>" help="The commit to compare with: HEAD^1 for a pull request's merge commit, the commit before a push"
+#USAGE flag "--head <ref>" default="HEAD" help="The commit to plan for"
+#USAGE flag "--pr-head <sha>" help="A pull request's own head commit, which the release and batch checks inspect instead of the merge commit"
+#USAGE flag "--pr-base <sha>" help="A pull request's base commit, which the batch check requires as the head commit's parent"
+#USAGE flag "--release-pr" help="The change is the release bot's own release-next pull request, so a version bump may skip the Rust jobs"
+#USAGE flag "--batch-pr" help="The change is the Count's own batch pull request, so a green batch may skip the heavy jobs"
+#USAGE flag "--files <paths>" help="Comma-separated changed paths to plan for instead of a git diff; skips the release and batch checks"
+#USAGE flag "--github-output <file>" help="Write the plan's outputs here; defaults to GITHUB_OUTPUT"
+#USAGE flag "--summary <file>" help="Append a Markdown summary of the plan here"
+
+# Every path either maps to the crates and jobs it can affect, or makes the
+# plan run everything. A path the planner does not know runs everything, so a
+# new kind of file is tested until someone teaches the planner about it.
+
+const ZERO_SHA = "0000000000000000000000000000000000000000"
+const DEFAULT_WEIGHT = 15
+const FULL_SHARDS = 3
+
+# mise.toml tools that only hk's lint steps run.
+const LINT_TOOLS = [
+  hk pkl jactionlint betterleaks zizmor "forgejo:wvhulle/nu-lint" "cargo:nu-lint"
+  "http:deepsource" tak usage nu
+]
+const DOCS_TASKS = ["docs:install" "docs:dev" "docs:build" "docs:deploy" "docs:upload"]
+
+# Paths that no build, test or docs job reads; the lint job still checks them.
+const IGNORED_PREFIXES = [
+  "assets/" ".claude/" "image/" "mise-tasks/image/" "mise-tasks/release/"
+  "mise-tasks/action/" "mise-tasks/benchmarks/" "mise-tasks/github/"
+  "mise-tasks/registry/" "mise-tasks/server/" "tests/action/" "skills/" ".github/"
+]
+const IGNORED_FILES = [
+  README.md AGENTS.md CLAUDE.md LICENSE .gitignore socket.yml communique.toml
+  cliff.toml tak.toml nu-lint.toml hk.pkl action.yml
+]
+
+# The crates whose tests read each fixtures directory.
+const FIXTURE_READERS = {
+  cli: [patchula-cli]
+  datasource: [patchula-datasource]
+  engine: [patchula-engine patchula-lookup]
+  github: [patchula-github patchula-update]
+  mise: [patchula-mise patchula-datasource patchula-notes patchula-engine patchula-tools]
+  notes: [patchula-notes]
+  testkit: [patchula-testkit]
+  tools: [patchula-tools]
+  update: [patchula-update]
+}
+
+# Tests that read other crates' sources: patchula-github checks every crate's
+# get_immutable calls, and patchula-lookup checks that lookup, engine and update
+# never name a manager.
+const SOURCE_READERS = [
+  {reader: patchula-github, dirs: null}
+  {reader: patchula-lookup, dirs: [lookup engine update]}
+]
+
+const CORPUS_READERS = [patchula-manager patchula-lookup patchula-lockfiles]
+const EXAMPLE_READERS = [patchula-config patchula-manager patchula-lookup patchula-cli]
+# The crates that compile GitHub's GraphQL schema into queries.
+const GRAPHQL_READERS = [patchula-github patchula-datasource patchula-engine patchula-update]
+
+def main [
+  --event: string = "pull_request"
+  --base: string = ""
+  --head: string = "HEAD"
+  --pr-head: string = ""
+  --pr-base: string = ""
+  --release-pr
+  --batch-pr
+  --files: string = ""
+  --github-output: string = ""
+  --summary: string = ""
+] {
+  let root = $env.FILE_PWD | path join ".." ".." | path expand
+  cd $root
+  let crates = workspace
+  let weights = read-weights ($root | path join mise-tasks ci crate-timings.tsv)
+  let plan = (
+    plan-change $crates $weights {
+      event: $event
+      base: $base
+      head: $head
+      fast_head: (if ($pr_head | is-empty) { $head } else { $pr_head })
+      fast_base: (if ($pr_base | is-empty) { $base } else { $pr_base })
+      release_pr: $release_pr
+      batch_pr: $batch_pr
+      files: $files
+    }
+  )
+  let output = if ($github_output | is-not-empty) {
+    $github_output
+  } else if "GITHUB_OUTPUT" in $env {
+    $env.GITHUB_OUTPUT
+  } else {
+    null
+  }
+  if $output != null {
+    $plan | reject reasons | items {|key, value| $"($key)=(output-value $value)\n" } | str join | save --append $output
+  }
+  if ($summary | is-not-empty) {
+    summarize $plan | save --append $summary
+  }
+  print ($plan | to json)
+}
+
+def plan-change [crates: table, weights: record, change: record]: nothing -> record {
+  if $change.event in [schedule workflow_dispatch] {
+    return (everything $crates $weights $"($change.event) runs everything")
+  }
+  let explicit = $change.files | is-not-empty
+  let base = $change.base
+  if not $explicit and (($base | is-empty) or $base == $ZERO_SHA) {
+    return (everything $crates $weights "no base commit")
+  }
+  if not $explicit and not (ensure-commit $base) {
+    return (everything $crates $weights $"base commit ($base) is unavailable")
+  }
+  let changed = if $explicit {
+    $change.files | split row "," | each { str trim } | where { is-not-empty } | uniq
+  } else {
+    let diff = ^git diff --name-only $base $change.head | complete
+    if $diff.exit_code != 0 {
+      return (everything $crates $weights $"git diff ($base) ($change.head) failed")
+    }
+    $diff.stdout | lines | where { is-not-empty }
+  }
+  if not $explicit {
+    let shortcut = fast-path $change ...$changed
+    if $shortcut != null {
+      return $shortcut
+    }
+  }
+  let toml = toml-effects $change $changed $explicit
+  let effects = $changed | each {|path| classify $path $crates $toml }
+  derive $crates $weights $effects $base
+}
+
+# The workspace's crates and the workspace crates each depends on, read from
+# the manifests so the planner needs no Rust toolchain.
+def workspace []: nothing -> table {
+  let manifests = glob crates/*/Cargo.toml | sort | each {|path|
+    {dir: ($path | path dirname | path basename), manifest: (open $path)}
+  }
+  let names = $manifests | get manifest.package.name
+  $manifests | each {|crate|
+    let manifest = $crate.manifest
+    let targets = $manifest.target? | default {} | values
+    let deps = [$manifest ...$targets]
+      | each {|table|
+        [dependencies dev-dependencies build-dependencies]
+          | each {|section| $table | get --optional $section | default {} | transpose key spec }
+          | flatten
+      }
+      | flatten
+      | each {|dep| if ($dep.spec | describe | str starts-with record) { $dep.spec.package? | default $dep.key } else { $dep.key } }
+      | where {|name| $name in $names }
+      | uniq
+    {dir: $crate.dir, name: $manifest.package.name, deps: $deps}
+  }
+}
+
+# The crates and every workspace crate that depends on one of them, through
+# normal, dev and build dependencies.
+def dependents [crates: table, ...roots: string]: nothing -> list<string> {
+  mut seen = $roots | uniq
+  mut queue = $seen
+  while ($queue | is-not-empty) {
+    let current = $queue | first
+    let found = $seen
+    let next = $crates | where {|crate| $current in $crate.deps and $crate.name not-in $found } | get name
+    $seen ++= $next
+    $queue = ($queue | skip 1) ++ $next
+  }
+  $seen
+}
+
+def have-commit [ref: string]: nothing -> bool {
+  (^git cat-file -e $"($ref)^{commit}" | complete).exit_code == 0
+}
+
+# Fetches a commit a shallow checkout lacks, deepening as far as it must.
+def ensure-commit [ref: string]: nothing -> bool {
+  if (have-commit $ref) {
+    return true
+  }
+  ^git fetch --no-tags --depth=50 origin $ref | complete
+  if (have-commit $ref) {
+    return true
+  }
+  ^git fetch --no-tags --unshallow origin | complete
+  have-commit $ref
+}
+
+# A shallow checkout's oldest commits show no parents; the release and batch
+# checks read the head commit's parent, so fetch it.
+def ensure-parent [ref: string]: nothing -> nothing {
+  let parents = ^git show --no-patch --format=%P $ref | complete
+  if $parents.exit_code != 0 or ($parents.stdout | str trim | is-empty) {
+    ^git fetch --no-tags --depth=2 origin $ref | complete
+  }
+  null
+}
+
+# Runs a mise task without letting it write its own GITHUB_OUTPUT lines, and
+# returns the last line it printed, or nothing when it failed.
+def task-verdict [...args: string]: nothing -> string {
+  let result = do {
+    hide-env --ignore-errors GITHUB_OUTPUT
+    ^mise run --quiet ...$args | complete
+  }
+  if $result.exit_code != 0 {
+    return ""
+  }
+  $result.stdout | lines | where { is-not-empty } | last 1 | str join | str trim
+}
+
+# The release bot's version bump and the Count's green batch, which CI already
+# checked on their parent, skip the heavy jobs.
+def fast-path [change: record, ...changed: string]: nothing -> any {
+  let head = $change.fast_head
+  let release_candidate = (
+    ($change.release_pr or $change.event == push)
+    and ($changed | is-not-empty)
+    and ($changed | all {|path| $path in [Cargo.toml Cargo.lock] })
+  )
+  if $release_candidate {
+    ensure-parent $head
+    if (task-verdict ...[release:bump --check $head --green-parent]) == "bump=true" {
+      return (shortcut release-bump true $change.base "a version bump of a commit CI passed on")
+    }
+  }
+  if $change.batch_pr or $change.event == push {
+    let trailer = ^git show --no-patch "--format=%(trailers:key=Patchula-Batch-Green,valueonly)" $head | complete
+    if $trailer.exit_code == 0 and ($trailer.stdout | str trim) == "true" {
+      ensure-parent $head
+      let base = commit-sha $change.fast_base
+      let args = if ($base | is-empty) { [] } else { [--base $base] }
+      if (task-verdict ...[github:batch-green $head ...$args]) == "green=true" {
+        return (shortcut batch-green false $change.base "a batch of updates already green on this base")
+      }
+    }
+  }
+  null
+}
+
+def commit-sha [ref: string]: nothing -> string {
+  if ($ref | is-empty) {
+    return ""
+  }
+  if $ref =~ '^[0-9a-f]{40}$' {
+    return $ref
+  }
+  let resolved = ^git rev-parse --verify --quiet $"($ref)^{commit}" | complete
+  if $resolved.exit_code == 0 { $resolved.stdout | str trim } else { "" }
+}
+
+def shortcut [mode: string, docs: bool, from_ref: string, reason: string]: nothing -> record {
+  {
+    mode: $mode
+    lint_all: false
+    rust_lint: false
+    build: false
+    build_cli: false
+    fixtures: false
+    tools: false
+    corpus: false
+    docs: $docs
+    test_shards: []
+    from_ref: $from_ref
+    reasons: [$reason]
+  }
+}
+
+def everything [crates: table, weights: record, reason: string]: nothing -> record {
+  {
+    mode: full
+    lint_all: true
+    rust_lint: true
+    build: true
+    build_cli: true
+    fixtures: true
+    tools: true
+    corpus: true
+    docs: true
+    test_shards: (shards ($crates | get name) $weights $FULL_SHARDS true)
+    from_ref: ""
+    reasons: [$reason]
+  }
+}
+
+def effect []: record -> record {
+  let given = $in
+  {
+    full: false
+    rust_lint: false
+    fixtures: false
+    tools: false
+    corpus: false
+    docs: false
+    closure: []
+    only: []
+    reasons: []
+  } | merge $given
+}
+
+def unknown [reason: string]: nothing -> record {
+  {full: true, rust_lint: true, reasons: [$reason]} | effect
+}
+
+# What a change to mise.toml, tasks.toml and mise.lock can affect, from the
+# parsed TOML of both sides, so a version bump of a lint tool runs only lint.
+def toml-effects [change: record, changed: list<string>, explicit: bool]: nothing -> record {
+  let before = {|path| ^git show $"($change.base):($path)" | from toml }
+  let after = {|path| if $explicit { open $path } else { ^git show $"($change.head):($path)" | from toml } }
+  let mise = if "mise.toml" in $changed {
+    try { mise-effect (do $before mise.toml) (do $after mise.toml) } catch { unknown "mise.toml could not be compared" }
+  } else {
+    {} | effect
+  }
+  let tasks = if "tasks.toml" in $changed {
+    try { tasks-effect (do $before tasks.toml) (do $after tasks.toml) } catch { unknown "tasks.toml could not be compared" }
+  } else {
+    {} | effect
+  }
+  let lock = if "mise.lock" in $changed and "mise.toml" not-in $changed and "tasks.toml" not-in $changed {
+    unknown "mise.lock changed without mise.toml or tasks.toml"
+  } else {
+    {} | effect
+  }
+  {"mise.toml": $mise, "tasks.toml": $tasks, "mise.lock": $lock}
+}
+
+def changed-keys [before: record, after: record]: nothing -> list<string> {
+  $before | columns | append ($after | columns) | uniq | where {|key|
+    ($before | get --optional $key) != ($after | get --optional $key)
+  }
+}
+
+def mise-effect [before: record, after: record]: nothing -> record {
+  if ($before | reject --optional tools) != ($after | reject --optional tools) {
+    return (unknown "mise.toml changed outside [tools]")
+  }
+  changed-keys ($before.tools? | default {}) ($after.tools? | default {}) | each {|tool|
+    if $tool in $LINT_TOOLS {
+      {} | effect
+    } else if $tool == go {
+      {tools: true} | effect
+    } else if $tool == node {
+      {tools: true, docs: true} | effect
+    } else if $tool in [rust mr-boxington zig] {
+      {full: true, rust_lint: true, reasons: [$"mise.toml moved ($tool)"]} | effect
+    } else {
+      unknown $"mise.toml changed tool ($tool)"
+    }
+  } | combine
+}
+
+def tasks-effect [before: record, after: record]: nothing -> record {
+  changed-keys $before $after | each {|task|
+    let old = $before | get --optional $task | default {}
+    let new = $after | get --optional $task | default {}
+    if $task == "test:tools" and ($old | reject --optional tools) == ($new | reject --optional tools) {
+      # A unit test keeps defaults.toml equal to these pins.
+      {tools: true, only: [patchula-tools]} | effect
+    } else if $task in $DOCS_TASKS {
+      {docs: true} | effect
+    } else {
+      unknown $"tasks.toml changed task ($task)"
+    }
+  } | combine
+}
+
+def combine []: list<record> -> record {
+  $in | reduce --fold ({} | effect) {|next, sum|
+    {
+      full: ($sum.full or $next.full)
+      rust_lint: ($sum.rust_lint or $next.rust_lint)
+      fixtures: ($sum.fixtures or $next.fixtures)
+      tools: ($sum.tools or $next.tools)
+      corpus: ($sum.corpus or $next.corpus)
+      docs: ($sum.docs or $next.docs)
+      closure: ($sum.closure | append $next.closure)
+      only: ($sum.only | append $next.only)
+      reasons: ($sum.reasons | append $next.reasons)
+    }
+  }
+}
+
+def rust-lint-path [path: string]: nothing -> bool {
+  (
+    ($path | str ends-with ".rs")
+    or ($path | path basename) == Cargo.toml
+    or $path in [Cargo.lock .cargo/config.toml clippy.toml]
+  )
+}
+
+def starts-with-any [path: string, ...prefixes: string]: nothing -> bool {
+  $prefixes | any {|prefix| $path | str starts-with $prefix }
+}
+
+def classify [path: string, crates: table, toml: record]: nothing -> record {
+  let rust_lint = rust-lint-path $path
+  let found = if $path == ".github/workflows/ci.yml" or ($path | str starts-with "mise-tasks/ci/") {
+    {full: true, rust_lint: true, docs: true, corpus: true, reasons: [$"($path) is CI itself"]} | effect
+  } else if $path == "skills/patchula/SKILL.md" or (starts-with-any $path "docs/" "mise-tasks/docs/") {
+    {docs: true} | effect
+  } else if $path in $IGNORED_FILES or (starts-with-any $path ...$IGNORED_PREFIXES) {
+    {} | effect
+  } else if ($path | str starts-with "crates/") {
+    crate-effect $path $crates
+  } else if ($path | str starts-with "fixtures/") {
+    let fixture_dir = $path | parse "fixtures/{dir}/{rest}" | get --optional 0.dir
+    let readers = if $fixture_dir == null { null } else { $FIXTURE_READERS | get --optional $fixture_dir }
+    if $readers == null {
+      unknown $"no crate is known to read ($path)"
+    } else {
+      {fixtures: true, tools: ($path | str starts-with "fixtures/tools/"), only: [patchula-testkit ...$readers]} | effect
+    }
+  } else if $path in [PatchulaConfig.pkl PatchulaSettings.pkl patchula.pkl] {
+    {closure: [patchula-config]} | effect
+  } else if ($path | str starts-with "examples/") {
+    {closure: $EXAMPLE_READERS} | effect
+  } else if $path in [tests/corpus-extraction.tsv tests/corpus-proposals.tsv] or (starts-with-any $path "tests/corpus/" "mise-tasks/corpus/") {
+    {corpus: true, only: $CORPUS_READERS} | effect
+  } else if $path in [tests/derived-versions.tsv tests/state-versions.tsv tests/state-exempt.tsv] {
+    {closure: [patchula-cache]} | effect
+  } else if $path in [mise.toml tasks.toml mise.lock] {
+    $toml | get --optional $path | default ({} | effect)
+  } else if $path == Cargo.toml {
+    {full: true, rust_lint: true, docs: true, reasons: ["Cargo.toml changed"]} | effect
+  } else if $path in [Cargo.lock clippy.toml mise-tasks/cc mise-tasks/ar] or ($path | str starts-with ".cargo/") {
+    unknown $"($path) changes every build"
+  } else {
+    unknown $"($path) is not a path the planner knows"
+  }
+  $found | update rust_lint {|it| $it.rust_lint or $rust_lint }
+}
+
+def crate-effect [path: string, crates: table]: nothing -> record {
+  let place = $path | parse --regex '^crates/(?<dir>[^/]+)/(?<area>[^/]+)' | get --optional 0
+  let crate = if $place == null { [] } else { $crates | where dir == $place.dir }
+  if ($crate | is-empty) {
+    return (unknown $"($path) is outside every workspace crate")
+  }
+  let dir = $place.dir
+  let area = $place.area
+  let name = $crate | first | get name
+  # Integration tests are their own binaries, which no other crate links.
+  if $area == tests {
+    return ({only: [$name]} | effect)
+  }
+  let readers = if $area == src {
+    $SOURCE_READERS | where {|scan| $scan.dirs == null or $dir in $scan.dirs } | get reader
+  } else {
+    []
+  }
+  let graphql = if $dir == github and $area == graphql { $GRAPHQL_READERS } else { [] }
+  {fixtures: ($dir == testkit), closure: [$name ...$graphql], only: $readers} | effect
+}
+
+def derive [crates: table, weights: record, effects: list<record>, base: string]: nothing -> record {
+  let sum = $effects | combine
+  let all = $crates | get name
+  let affected = if $sum.full { $all } else {
+    dependents $crates ...$sum.closure | append $sum.only | uniq | where {|name| $name in $all }
+  }
+  let tools = $sum.full or $sum.tools or "patchula-tools" in $affected
+  let build_cli = $sum.full or $sum.corpus
+  let build = $build_cli or $sum.full or $sum.fixtures
+  let count = if $sum.full { $FULL_SHARDS } else { shard-count $affected $weights }
+  let test_shards = shards $affected $weights $count $sum.full
+  let mode = if $sum.full {
+    "full"
+  } else if ($test_shards | is-empty) and not ($build or $tools or $sum.corpus or $sum.docs) {
+    "lint-only"
+  } else {
+    "selective"
+  }
+  {
+    mode: $mode
+    lint_all: false
+    rust_lint: ($sum.full or $sum.rust_lint)
+    build: $build
+    build_cli: $build_cli
+    fixtures: ($sum.full or $sum.fixtures)
+    tools: $tools
+    corpus: $sum.corpus
+    docs: $sum.docs
+    test_shards: $test_shards
+    from_ref: $base
+    reasons: ($sum.reasons | uniq)
+  }
+}
+
+# The measured weights as a record of crate to weight, skipping comment lines.
+def read-weights [path: string]: nothing -> record {
+  open --raw $path
+    | lines
+    | where {|line| not ($line | str starts-with "#") }
+    | str join "\n"
+    | from tsv
+    | reduce --fold {} {|row, weights| $weights | insert $row.crate ($row.weight | into int) }
+}
+
+def weight-of [weights: record, name: string]: nothing -> int {
+  $weights | get --optional $name | default $DEFAULT_WEIGHT
+}
+
+def shard-count [crates: list<string>, weights: record]: nothing -> int {
+  if ($crates | is-empty) {
+    return 0
+  }
+  let total = $crates | each {|name| weight-of $weights $name } | math sum
+  if $total <= 80 or ($crates | length) <= 4 {
+    1
+  } else if $total <= 170 {
+    2
+  } else {
+    3
+  }
+}
+
+# Longest-processing-time packing: the heaviest crate goes first, each to the
+# lightest shard so far.
+def shards [crates: list<string>, weights: record, count: int, full: bool]: nothing -> list<record> {
+  if ($crates | is-empty) or $count < 1 {
+    return []
+  }
+  let empty = 1..$count | each { {packages: [], weight: 0} }
+  $crates
+    | each {|name| {name: $name, weight: (weight-of $weights $name)} }
+    | sort-by weight name --reverse
+    | reduce --fold $empty {|crate, buckets|
+      let lightest = $buckets | get weight | math min
+      let index = $buckets | enumerate | where item.weight == $lightest | first | get index
+      $buckets | update $index {|bucket|
+        {packages: ($bucket.packages | append $crate.name), weight: ($bucket.weight + $crate.weight)}
+      }
+    }
+    | where {|bucket| $bucket.packages | is-not-empty }
+    | enumerate
+    | each {|bucket|
+      {
+        shard: $"shard-($bucket.index + 1)"
+        packages: ($bucket.item.packages | sort | str join ",")
+        count: ($bucket.item.packages | length)
+        weight: $bucket.item.weight
+        full: $full
+      }
+    }
+}
+
+def output-value [value: any]: nothing -> string {
+  match ($value | describe) {
+    "string" => $value
+    "bool" => ($value | into string)
+    _ => ($value | to json --raw)
+  }
+}
+
+def yes-no [value: bool]: nothing -> string {
+  if $value { "yes" } else { "no" }
+}
+
+def summarize [plan: record]: nothing -> string {
+  let lint = if $plan.lint_all { "whole tree" } else if ($plan.from_ref | is-empty) { "no" } else { $"since `($plan.from_ref)`" }
+  let shards = $plan.test_shards | each {|shard|
+    $"| ($shard.shard) | ($shard.weight) | ($shard.packages | str replace --all ',' ', ') |"
+  }
+  [
+    $"### CI plan: ($plan.mode)"
+    ""
+    ...($plan.reasons | each {|reason| $"- ($reason)" })
+    ""
+    "| Job | Runs |"
+    "| --- | --- |"
+    $"| Lint | ($lint); Clippy and rustfmt: (yes-no $plan.rust_lint) |"
+    $"| Build | (yes-no $plan.build); debug binary: (yes-no $plan.build_cli); fixture scan: (yes-no $plan.fixtures) |"
+    $"| Unit tests | ($plan.test_shards | length) shards |"
+    $"| Real lockfile tools | (yes-no $plan.tools) |"
+    $"| Corpus | (yes-no $plan.corpus) |"
+    $"| Docs | (yes-no $plan.docs) |"
+    ""
+    ...(if ($shards | is-empty) { [] } else { ["| Shard | Weight | Crates |" "| --- | --- | --- |" ...$shards ""] })
+  ] | str join "\n" | $in + "\n"
+}

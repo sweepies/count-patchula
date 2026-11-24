@@ -4,15 +4,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Pushes and pull requests test only what their changes can affect; this run
+  # tests everything, so whatever a selective run missed turns up within hours.
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to a pull request supersedes its older runs. Runs on main finish,
-# since they publish the caches.
+# A newer push to a pull request supersedes its older runs, and a newer
+# scheduled run supersedes an older one. Runs on main finish, since they
+# publish the caches.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'schedule' || github.event_name == 'workflow_dispatch' && 'dispatch' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'schedule' }}
 
 # Every job runs one or two mise tasks, so `mise run ci` runs the same checks
 # locally.
@@ -22,103 +28,66 @@ env:
   MISE_LOCKED: "1"
 
 jobs:
-  # Each job below runs only when a changed path can affect it; a docs-only
-  # change skips the Rust jobs. A skipped job still reports its check.
+  # ci:plan maps the changed paths to the jobs and crates they can affect,
+  # through the workspace's dependency graph, and packs the affected crates'
+  # tests into shards by measured weight. A path it does not know runs
+  # everything. A skipped job still reports its check.
   changes:
-    name: Changed paths
+    name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: read
       # release:bump --check reads the CI result of the release commit's parent.
       actions: read
     outputs:
-      rust: ${{ steps.release.outputs.bump != 'true' && steps.batch.outputs.green != 'true' && (steps.some.outputs.rust == 'true' || steps.every.outputs.rust == 'true') }}
-      docs: ${{ steps.batch.outputs.green != 'true' && steps.some.outputs.docs }}
+      lint_all: ${{ steps.plan.outputs.lint_all }}
+      rust_lint: ${{ steps.plan.outputs.rust_lint }}
+      build: ${{ steps.plan.outputs.build }}
+      build_cli: ${{ steps.plan.outputs.build_cli }}
+      fixtures: ${{ steps.plan.outputs.fixtures }}
+      tools: ${{ steps.plan.outputs.tools }}
+      corpus: ${{ steps.plan.outputs.corpus }}
+      docs: ${{ steps.plan.outputs.docs }}
+      test_shards: ${{ steps.plan.outputs.test_shards }}
+      from_ref: ${{ steps.plan.outputs.from_ref }}
     env:
-      # The release bot's own PR from this repository, the only one the release
-      # check below may run for (see there). One predicate, so the steps that
-      # use it cannot drift apart.
+      # The release bot's own PR from this repository, the only one whose
+      # version bump may skip the Rust jobs: the check runs the PR's own copy
+      # of release:bump, so a fork could name its branch release-next and make
+      # it skip its tests. One predicate, so the steps cannot drift apart.
       RELEASE_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]' }}
       # The Count's own batch PR from this repository, the only one the
-      # batch-green trailer check below may run for.
+      # batch-green trailer check may skip the heavy jobs for.
       BATCH_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'patchula/batch' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]' }}
     steps:
-      # A push is compared with the commit before it, which needs the history.
+      # A pull request's merge commit and its parents, or a push and the commit
+      # before it; ci:plan fetches more when it needs it.
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
-      # A file counts when it matches any pattern of a filter.
-      - id: some
-        uses: dorny/paths-filter@v4.0.3
-        with:
-          filters: |
-            rust:
-              - .github/workflows/ci.yml
-            docs:
-              - docs/**
-              - mise.toml
-              - tasks.toml
-              - mise.lock
-              - .github/workflows/ci.yml
-      # A file counts when it matches every pattern: anything outside these
-      # may change what the Rust jobs check.
-      - id: every
-        uses: dorny/paths-filter@v4.0.3
-        with:
-          predicate-quantifier: every
-          filters: |
-            rust:
-              - "**"
-              - "!docs/**"
-              - "!assets/**"
-              - "!skills/**"
-              - "!.claude/**"
-              - "!README.md"
-              - "!AGENTS.md"
-              - "!CLAUDE.md"
-              - "!LICENSE"
-              - "!.gitignore"
-              - "!socket.yml"
-              - "!communique.toml"
-              - "!cliff.toml"
-              - "!tak.toml"
-              # hk lints the workflows on every change.
-              - "!action.yml"
-              - "!.github/**"
-      # The release bot's PR is one commit on a green main that only bumps the
-      # version. When release:bump recognises that commit and CI passed on its
-      # parent on main, a version bump has nothing left for the Rust jobs to
-      # check, so they skip; anything else in the PR runs them all. The check
-      # runs the PR's own copy of the task, so it only runs for the bot's PR
-      # from this repository (RELEASE_PR): a fork could name its branch
-      # release-next and make the task skip its tests.
-      - if: env.RELEASE_PR == 'true' || env.BATCH_PR == 'true'
-        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+          fetch-depth: 2
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
           cache: false
         env:
-          MISE_ENABLE_TOOLS: ${{ env.RELEASE_PR == 'true' && 'nu,gh' || 'nu' }}
-      - id: release
-        if: env.RELEASE_PR == 'true'
+          MISE_ENABLE_TOOLS: ${{ (env.RELEASE_PR == 'true' || github.event_name == 'push') && 'nu,gh' || 'nu' }}
+      # A pull request's changes are its merge commit against the base branch
+      # (HEAD^1); the release and batch checks inspect the pull request's own
+      # head commit and base instead.
+      - id: plan
         env:
-          MISE_ENABLE_TOOLS: nu,gh
+          MISE_ENABLE_TOOLS: ${{ (env.RELEASE_PR == 'true' || github.event_name == 'push') && 'nu,gh' || 'nu' }}
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: mise run release:bump --check "$HEAD_SHA" --green-parent
-      # When every update in the batch PR came from a PR that was already green
-      # on this base commit, the Count marks the commit with
-      # `Patchula-Batch-Green: true`. Verify that the commit sits directly on
-      # the base commit with matching trailers before skipping the heavy jobs.
-      - id: batch
-        if: env.BATCH_PR == 'true'
-        env:
-          MISE_ENABLE_TOOLS: nu
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: mise run github:batch-green "$HEAD_SHA" --base "$BASE_SHA"
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: >-
+          mise run ci:plan --event "$EVENT" --base "$BASE" --head HEAD
+          --pr-head "$PR_HEAD" --pr-base "$PR_BASE"
+          --release-pr="$RELEASE_PR" --batch-pr="$BATCH_PR"
+          --summary "$GITHUB_STEP_SUMMARY"
 
   # hk.pkl's check hook, the same steps the git hooks run, plus Clippy. It runs
   # on every change, since it is the only secret scan in CI, but each step
@@ -134,32 +103,38 @@ jobs:
       # Code scanning shows hk's findings on the diff.
       security-events: write
     env:
-      # Lint never needs these. When the Rust jobs skip, Clippy and rustfmt
-      # skip too, and their toolchain is left out. That includes the release
-      # bot's version bump, whose Cargo.toml and Cargo.lock changes would
-      # otherwise start Clippy without the toolchain.
-      MISE_DISABLE_TOOLS: go,node,tak,usage,nu,http:deepsource${{ needs.changes.outputs.rust != 'true' && ',rust,mr-boxington,zig' || '' }}
-      HK_SKIP_STEPS: ${{ needs.changes.outputs.rust != 'true' && 'clippy,cargo-fmt' || '' }}
-      # A pull request's merge commit has the base branch as its first parent.
-      FROM_REF: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+      # Clippy and rustfmt need the Rust toolchain only when Rust may have
+      # changed; otherwise they skip and the toolchain is left out. That
+      # includes the release bot's version bump, whose Cargo.toml and
+      # Cargo.lock changes would otherwise start Clippy.
+      MISE_ENABLE_TOOLS: ${{ needs.changes.outputs.rust_lint == 'true' && 'rust,mr-boxington,zig,hk,pkl,jactionlint,betterleaks,zizmor,forgejo:wvhulle/nu-lint' || 'hk,pkl,jactionlint,betterleaks,zizmor,forgejo:wvhulle/nu-lint' }}
+      HK_SKIP_STEPS: ${{ needs.changes.outputs.rust_lint != 'true' && 'clippy,cargo-fmt' || '' }}
+      FROM_REF: ${{ needs.changes.outputs.from_ref }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-          # hk compares against the base branch, or the commit before a push.
-          fetch-depth: 0
+          # A pull request's merge commit has the base branch as its first
+          # parent; a push of one commit has the commit before it.
+          fetch-depth: 2
+      # A push of several commits compares with a commit the shallow checkout
+      # lacks. hk diffs the two trees when their merge base is missing.
+      - if: needs.changes.outputs.lint_all != 'true' && github.event_name == 'push'
+        run: git cat-file -e "$FROM_REF^{commit}" 2>/dev/null || git fetch --no-tags --depth=50 origin "$FROM_REF" || git fetch --no-tags --unshallow origin
       # mise checks every stored download against mise.lock before it uses
       # it, so the store is cached instead of the installs.
-      - uses: actions/cache/restore@v6.1.0
+      - id: mise-downloads
+        if: needs.changes.outputs.rust_lint == 'true'
+        uses: actions/cache/restore@v6.1.0
         with:
           path: &mise-downloads ~/.cache/mise/downloads-cas
-          key: &mise-downloads-key mise-downloads-${{ runner.os }}-${{ hashFiles('mise.lock') }}
-          restore-keys: &mise-downloads-restore mise-downloads-${{ runner.os }}-
+          key: &mise-downloads-rust-key mise-downloads-rust-${{ runner.os }}-${{ hashFiles('mise.lock') }}
+          restore-keys: &mise-downloads-rust-restore mise-downloads-rust-${{ runner.os }}-
       - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
           cache: false
       - id: cargo-downloads
-        if: needs.changes.outputs.rust == 'true'
+        if: needs.changes.outputs.rust_lint == 'true'
         uses: actions/cache/restore@v6.1.0
         with:
           path: &cargo-downloads |
@@ -168,7 +143,7 @@ jobs:
             ~/.cargo/git/db
           key: &cargo-downloads-key cargo-downloads-v1-${{ hashFiles('Cargo.lock') }}
           restore-keys: &cargo-downloads-restore cargo-downloads-v1-
-      - if: needs.changes.outputs.rust == 'true'
+      - if: needs.changes.outputs.rust_lint == 'true'
         uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd # v1.7.4
         # The pinned action has no nonfatal-cache input. This also covers its post step.
         continue-on-error: true
@@ -178,10 +153,16 @@ jobs:
           isolate-objects-cache: true
           # All target consumers finish before the post step; keep only portable objects.
           clean-target-before-export: true
-          cache-generation: v4-lint-objects
+          cache-generation: v5-lint-objects
           save-on-pull-request: false
-      - env:
+          save-on-workflow-dispatch: true
+      - if: needs.changes.outputs.lint_all == 'true'
+        env:
           # zizmor's online audits, such as impostor commits.
+          GH_TOKEN: ${{ github.token }}
+        run: mise run lint:ci --all
+      - if: needs.changes.outputs.lint_all != 'true'
+        env:
           GH_TOKEN: ${{ github.token }}
         run: mise run lint:ci "$FROM_REF"
       - if: always()
@@ -192,9 +173,17 @@ jobs:
         with:
           sarif_file: ${{ runner.temp }}/hk.sarif
           category: hk
+      # With Clippy, this job installs exactly the Rust tools the build and
+      # test jobs use, plus the small lint tools, so it publishes their store.
+      - if: github.ref == 'refs/heads/main' && needs.changes.outputs.rust_lint == 'true' && steps.mise-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        continue-on-error: true
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-rust-key
       # Clippy checks every target, so it fetches every crate the other jobs
       # build; this job alone publishes the downloads, from main.
-      - if: github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true' && steps.cargo-downloads.outputs.cache-hit != 'true'
+      - if: github.ref == 'refs/heads/main' && needs.changes.outputs.rust_lint == 'true' && steps.cargo-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6.1.0
         continue-on-error: true
         with:
@@ -202,21 +191,22 @@ jobs:
           key: *cargo-downloads-key
 
   build:
-    name: "Build: workspace, fixture secret scan"
+    name: "Build: debug binary, fixture secret scan"
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      MISE_ENABLE_TOOLS: rust,mr-boxington,zig
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - id: mise-downloads
-        uses: actions/cache/restore@v6.1.0
+      - uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
-          key: *mise-downloads-key
-          restore-keys: *mise-downloads-restore
+          key: *mise-downloads-rust-key
+          restore-keys: *mise-downloads-rust-restore
       - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
           cache: false
@@ -232,47 +222,51 @@ jobs:
           github-cache-mode: objects
           isolate-objects-cache: true
           clean-target-before-export: true
-          cache-generation: v4-build-objects
+          cache-generation: v5-build-objects
           save-on-pull-request: false
-      - run: mise run build
+          save-on-workflow-dispatch: true
       # The corpus lookup runs this binary instead of building its own. Artifacts
       # belong to the run, not the attempt, so a rerun of only the corpus job
       # still finds it, and a rerun of this job replaces it.
-      - uses: actions/upload-artifact@v7.0.2
+      - if: needs.changes.outputs.build_cli == 'true'
+        run: mise run build:cli-debug
+      - if: needs.changes.outputs.build_cli == 'true'
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: patchula-debug
           overwrite: true
           path: target/debug/patchula
           if-no-files-found: error
           retention-days: 1
-      # The scanner is a dev binary, so it reuses the build above.
-      - run: mise run fixtures:check
+      - if: needs.changes.outputs.fixtures == 'true'
+        run: mise run fixtures:check
 
-  # The lockfile side (patchula-update, patchula-tools, patchula-lockfiles)
-  # takes about a minute on its own, so it runs beside the other crates
-  # instead of after them.
+  # Each shard tests the crates ci:plan packed into it. A full run's shards
+  # keep the same crates, so each has its own objects cache; a selective run
+  # restores a full shard's cache and saves to a shared partial one instead.
   test:
-    name: "Tests: unit (${{ matrix.part }})"
+    name: "Tests: unit (${{ matrix.shard.shard }})"
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.test_shards != '[]' && needs.changes.outputs.test_shards != ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        part: [update, others]
+        shard: ${{ fromJSON(needs.changes.outputs.test_shards) }}
     env:
       PATCHULA_RECORD: "0"
+      MISE_ENABLE_TOOLS: rust,mr-boxington,zig
+      PACKAGES: ${{ matrix.shard.packages }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - id: mise-downloads
-        uses: actions/cache/restore@v6.1.0
+      - uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
-          key: *mise-downloads-key
-          restore-keys: *mise-downloads-restore
+          key: *mise-downloads-rust-key
+          restore-keys: *mise-downloads-rust-restore
       - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
           cache: false
@@ -288,14 +282,17 @@ jobs:
           github-cache-mode: objects
           isolate-objects-cache: true
           clean-target-before-export: true
-          cache-generation: v4-test-${{ matrix.part }}-objects
+          cache-generation: ${{ matrix.shard.full && format('v5-test-{0}-objects', matrix.shard.shard) || 'v5-test-partial-objects' }}
+          # Empty for a full shard, which keeps the generated prefixes.
+          restore-keys: ${{ !matrix.shard.full && format('linux-x64-mbx-v5-test-{0}-objects-{1}linux-x64-mbx-v5-test-shard-1-objects-', matrix.shard.shard, fromJSON('"\n"')) || '' }}
           save-on-pull-request: false
-      - run: mise run test:unit --part "${{ matrix.part }}"
+          save-on-workflow-dispatch: true
+      - run: mise run test:unit --packages "$PACKAGES"
 
   tools:
     name: "Tests: real lockfile tools"
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.tools == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -303,16 +300,19 @@ jobs:
       # yarn and poetry install through vfox plugins, whose downloads mise
       # cannot lock, so locked mode would refuse them.
       MISE_LOCKED: "0"
+      # The Rust tools and the lockfile engines; none of the lint tools.
+      MISE_DISABLE_TOOLS: tak,usage,nu,hk,pkl,jactionlint,betterleaks,zizmor,forgejo:wvhulle/nu-lint,cargo:nu-lint,http:deepsource
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+      # Only this job installs the lockfile engines, so their store is its own.
       - id: mise-downloads
         uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
-          key: *mise-downloads-key
-          restore-keys: *mise-downloads-restore
+          key: &mise-downloads-tools-key mise-downloads-tools-${{ runner.os }}-${{ hashFiles('mise.lock') }}
+          restore-keys: mise-downloads-tools-${{ runner.os }}-
       - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
           cache: false
@@ -328,37 +328,33 @@ jobs:
           github-cache-mode: objects
           isolate-objects-cache: true
           clean-target-before-export: true
-          cache-generation: v4-tools-objects
+          cache-generation: v5-tools-objects
           save-on-pull-request: false
+          save-on-workflow-dispatch: true
       - run: mise run test:tools
-      # This job installs the base tools and every lockfile engine, so its
-      # store holds nearly every download the other jobs need.
       - if: github.ref == 'refs/heads/main' && steps.mise-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6.1.0
         continue-on-error: true
         with:
           path: *mise-downloads
-          key: *mise-downloads-key
+          key: *mise-downloads-tools-key
 
   # The lookup is mostly network time, so the build job's dev binary does it
-  # instead of a release build of its own, which took about two minutes and a
-  # separate 250 MB objects cache.
+  # instead of a release build of its own.
   corpus:
     name: "Corpus: lookup"
     needs: [changes, build]
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.corpus == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # corpus:report is the only tool this job installs; the binary is the
+      # build job's.
+      MISE_ENABLE_TOOLS: nu
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - id: mise-downloads
-        uses: actions/cache/restore@v6.1.0
-        with:
-          path: *mise-downloads
-          key: *mise-downloads-key
-          restore-keys: *mise-downloads-restore
       - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
           cache: false
@@ -368,12 +364,14 @@ jobs:
           path: ${{ runner.temp }}/bin
       - run: chmod +x "$RUNNER_TEMP/bin/patchula"
       # Registry validators and catalogs carry over between runs, like a real
-      # deployment's cache; a cold run still works, just slower. Main publishes.
+      # deployment's cache; a cold run still works, just slower. Only the
+      # database carries over, not the repository worktrees beside it. Main
+      # publishes.
       - uses: actions/cache/restore@v6.1.0
         with:
-          path: ${{ runner.temp }}/corpus-cache
-          key: corpus-v2-${{ github.run_id }}
-          restore-keys: corpus-v2-
+          path: ${{ runner.temp }}/corpus-cache/cache.sqlite
+          key: corpus-v3-${{ github.run_id }}
+          restore-keys: corpus-v3-
       # A dry run looks every dependency up and plans every branch, editing
       # each manifest in memory, without writing anything.
       - name: Look up and plan every corpus dependency
@@ -381,12 +379,16 @@ jobs:
           PATCHULA_TOKEN: ${{ github.token }}
           PATCHULA_BIN: ${{ runner.temp }}/bin/patchula
         run: mise run corpus:report --cache "$RUNNER_TEMP/corpus-cache" --summary "$GITHUB_STEP_SUMMARY"
+      # Fold the write-ahead log in and drop free pages, so the saved database
+      # stays small.
+      - if: github.ref == 'refs/heads/main'
+        run: if [ -f "$RUNNER_TEMP/corpus-cache/cache.sqlite" ]; then sqlite3 "$RUNNER_TEMP/corpus-cache/cache.sqlite" "PRAGMA wal_checkpoint(TRUNCATE); VACUUM;"; fi
       - if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6.1.0
         continue-on-error: true
         with:
-          path: ${{ runner.temp }}/corpus-cache
-          key: corpus-v2-${{ github.run_id }}
+          path: ${{ runner.temp }}/corpus-cache/cache.sqlite
+          key: corpus-v3-${{ github.run_id }}
       - name: Publish the corpus report
         if: always()
         uses: actions/upload-artifact@v7.0.2
@@ -402,16 +404,26 @@ jobs:
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # The docs tasks' own tools.
+      MISE_ENABLE_TOOLS: node,aube
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/cache/restore@v6.1.0
+      - id: mise-downloads
+        uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
-          key: *mise-downloads-key
-          restore-keys: *mise-downloads-restore
+          key: &mise-downloads-docs-key mise-downloads-docs-${{ runner.os }}-${{ hashFiles('mise.lock') }}
+          restore-keys: mise-downloads-docs-${{ runner.os }}-
       - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
         with:
           cache: false
       - run: mise run docs:build
+      - if: github.ref == 'refs/heads/main' && steps.mise-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        continue-on-error: true
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-docs-key
