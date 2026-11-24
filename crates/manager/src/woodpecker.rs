@@ -12,8 +12,8 @@ pub(super) fn extract(
     text: &Lines<'_>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    let documents = yaml::docs(text)?;
-    let (locations, aliases) = yaml_locations::parse_aliased(text)?;
+    let documents = text.yaml_documents()?;
+    let (locations, aliases) = text.yaml_aliased()?;
     let mut out = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for (index, doc) in documents.iter().enumerate() {

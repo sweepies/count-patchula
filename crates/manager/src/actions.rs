@@ -16,24 +16,27 @@ const FORGEJO_ACTIONS: &str = "data.forgejo.org";
 pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let bare = path.starts_with(".forgejo/").then_some(FORGEJO_ACTIONS);
     let forge = path.starts_with(".forgejo/") || path.starts_with(".gitea/");
-    let root: Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
+    let root = text.yaml_document()?;
     // Every scalar is located through the file's YAML structure, parsed
     // once: a matching line inside a `run: |` script is text, never a step.
     let mut file = Workflow {
         path,
         text,
         bare,
-        locations: crate::yaml_locations::parse(text)?,
+        locations: text.yaml_locations()?,
         out: Vec::new(),
     };
     let mut used = std::collections::BTreeSet::new();
+    // The file's lines with their offsets, split once for every job's
+    // runner scope.
+    let mut lines = None;
     if let Some(jobs) = root.get("jobs").and_then(Value::as_mapping) {
         for (job, value) in jobs {
             let job = job.as_str().unwrap_or("?");
             let at = format!("/jobs/{}", pointer_token(job));
             // Forgejo and Gitea runner labels name the instance's own runners.
             if let Some(runs_on) = value.get("runs-on").filter(|_| !forge) {
-                let scope = runner_scope(text, job)?;
+                let scope = runner_scope(text, lines.get_or_insert_with(|| offsets(text)), job)?;
                 runners(
                     path,
                     text,
@@ -101,7 +104,7 @@ struct Workflow<'a, 'b> {
     text: &'a Lines<'b>,
     bare: Option<&'a str>,
     /// Every scalar's span, by its pointer under the document (`/0`).
-    locations: BTreeMap<String, Location>,
+    locations: &'a BTreeMap<String, Location>,
     out: Vec<Dependency>,
 }
 
@@ -458,17 +461,24 @@ fn runners(
     Ok(())
 }
 
-// Restrict literal locations to this job's runs-on subtree. Identical labels
-// elsewhere (especially self-hosted jobs and run text) must never be edited.
-fn runner_scope(text: &str, job: &str) -> Result<std::ops::Range<usize>, String> {
-    let lines: Vec<_> = text
-        .split_inclusive('\n')
+/// Each line of `text` with the byte offset it starts at.
+fn offsets(text: &str) -> Vec<(usize, &str)> {
+    text.split_inclusive('\n')
         .scan(0, |offset, line| {
             let start = *offset;
             *offset += line.len();
             Some((start, line))
         })
-        .collect();
+        .collect()
+}
+
+// Restrict literal locations to this job's runs-on subtree. Identical labels
+// elsewhere (especially self-hosted jobs and run text) must never be edited.
+fn runner_scope(
+    text: &str,
+    lines: &[(usize, &str)],
+    job: &str,
+) -> Result<std::ops::Range<usize>, String> {
     let jobs = lines
         .iter()
         .position(|(_, line)| {

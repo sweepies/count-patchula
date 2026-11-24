@@ -57,7 +57,7 @@ pub(super) fn extract(
     path: &str,
     text: &Lines<'_>,
     manager: Manager,
-    files: &BTreeMap<&str, Value<'_>>,
+    files: &BTreeMap<&str, Resolution>,
 ) -> Result<Vec<Dependency>, String> {
     let root = ast(text, false)?;
     let object = root.as_object().ok_or("package.json must be an object")?;
@@ -245,11 +245,77 @@ fn collect(
         }
     }
 }
+/// One lockfile's versions by key, read once so each manifest dependency
+/// is a lookup rather than a scan of every locked package. Each map holds
+/// the first property of each name, as `Object::get_*` finds it, with the
+/// version it gives, if any.
+#[derive(Default)]
+pub(super) struct Resolution {
+    /// `packages`, by path (`node_modules/x`) in `package-lock.json` and by
+    /// name in `bun.lock`; `None` when the lock has no such object.
+    packages: Option<std::collections::HashMap<String, Option<String>>>,
+    /// `package-lock.json`'s v1 `dependencies`, by name.
+    dependencies: Option<std::collections::HashMap<String, Option<String>>>,
+}
+
+/// The [`Resolution`] of each lockfile in `locks`.
+pub(super) fn resolutions<'a>(
+    locks: &BTreeMap<&'a str, Value<'_>>,
+) -> BTreeMap<&'a str, Resolution> {
+    fn index(
+        object: Option<&jsonc_parser::ast::Object<'_>>,
+        version: impl Fn(&Value<'_>) -> Option<String>,
+    ) -> Option<std::collections::HashMap<String, Option<String>>> {
+        let mut out = std::collections::HashMap::new();
+        for prop in &object?.properties {
+            out.entry(prop.name.as_str().to_owned())
+                .or_insert_with(|| version(&prop.value));
+        }
+        Some(out)
+    }
+    let lock_version = |value: &Value<'_>| {
+        value
+            .as_object()?
+            .get_string("version")
+            .map(|v| v.value.to_string())
+    };
+    let bun_version = |value: &Value<'_>| {
+        let value = value.as_array()?.elements.first()?.as_string_lit()?;
+        value.value.rsplit_once('@').map(|(_, v)| v.to_owned())
+    };
+    locks
+        .iter()
+        .map(|(path, root)| {
+            let root = root.as_object();
+            let field = |name| root.and_then(|v| v.get_object(name));
+            let resolution = if path.ends_with("bun.lock") {
+                Resolution {
+                    packages: index(field("packages"), bun_version),
+                    dependencies: None,
+                }
+            } else {
+                Resolution {
+                    packages: index(field("packages"), lock_version),
+                    dependencies: index(field("dependencies"), lock_version),
+                }
+            };
+            (*path, resolution)
+        })
+        .collect()
+}
+
 fn resolved(
     path: &str,
     name: &str,
-    files: &BTreeMap<&str, Value<'_>>,
+    files: &BTreeMap<&str, Resolution>,
 ) -> Result<Option<String>, String> {
+    let found = |index: &Option<std::collections::HashMap<String, Option<String>>>, key: &str| {
+        index
+            .as_ref()
+            .and_then(|index| index.get(key))
+            .cloned()
+            .flatten()
+    };
     let mut directory = path.rsplit_once('/').map_or("", |(p, _)| p);
     loop {
         let prefix = if directory.is_empty() {
@@ -257,8 +323,8 @@ fn resolved(
         } else {
             format!("{directory}/")
         };
-        if let Some(root) = files.get(format!("{prefix}package-lock.json").as_str()) {
-            if let Some(packages) = root.as_object().and_then(|v| v.get_object("packages")) {
+        if let Some(lock) = files.get(format!("{prefix}package-lock.json").as_str()) {
+            if lock.packages.is_some() {
                 let relative = path
                     .strip_prefix(&prefix)
                     .unwrap_or(path)
@@ -268,25 +334,17 @@ fn resolved(
                     format!("{relative}node_modules/{name}"),
                     format!("node_modules/{name}"),
                 ] {
-                    if let Some(version) = packages
-                        .get_object(&candidate)
-                        .and_then(|v| v.get_string("version"))
-                    {
-                        return Ok(Some(version.value.to_string()));
+                    if let Some(version) = found(&lock.packages, &candidate) {
+                        return Ok(Some(version));
                     }
                 }
             }
-            if let Some(v) = root
-                .as_object()
-                .and_then(|v| v.get_object("dependencies"))
-                .and_then(|v| v.get_object(name))
-                .and_then(|v| v.get_string("version"))
-            {
-                return Ok(Some(v.value.to_string()));
+            if let Some(version) = found(&lock.dependencies, name) {
+                return Ok(Some(version));
             }
         }
-        if let Some(root) = files.get(format!("{prefix}bun.lock").as_str())
-            && let Some(packages) = root.as_object().and_then(|v| v.get_object("packages"))
+        if let Some(lock) = files.get(format!("{prefix}bun.lock").as_str())
+            && lock.packages.is_some()
         {
             for key in [
                 name.to_owned(),
@@ -295,13 +353,8 @@ fn resolved(
                     path.strip_suffix("/package.json").unwrap_or("")
                 ),
             ] {
-                if let Some(value) = packages
-                    .get_array(&key)
-                    .and_then(|v| v.elements.first())
-                    .and_then(Value::as_string_lit)
-                    && let Some((_, v)) = value.value.rsplit_once('@')
-                {
-                    return Ok(Some(v.into()));
+                if let Some(version) = found(&lock.packages, &key) {
+                    return Ok(Some(version));
                 }
             }
         }
@@ -320,8 +373,8 @@ pub(super) fn catalogs(
     text: &Lines<'_>,
     manager: Manager,
 ) -> Result<Vec<Dependency>, String> {
-    let locations = crate::yaml_locations::parse(text)?;
-    let Some(document) = crate::yaml::docs(text)?.into_iter().next() else {
+    let locations = text.yaml_locations()?;
+    let Some(document) = text.yaml_documents()?.first() else {
         return Ok(Vec::new());
     };
     let mut groups = Vec::new();
@@ -763,7 +816,7 @@ impl crate::Ecosystem for Descriptor {
         // package.json shared by npm/bun is scanned once, preferring bun only
         // when npm is disabled. Lockfiles provide resolution, never transitive
         // deps.
-        let node = if scanner.config.managers.contains(&Manager::Npm) {
+        let node = if scanner.enabled(Manager::Npm) {
             Manager::Npm
         } else {
             Manager::Bun
@@ -771,16 +824,16 @@ impl crate::Ecosystem for Descriptor {
         if self.manager != node {
             return Ok(Prepared::default());
         }
-        let lock_files = std::rc::Rc::new(locks(files)?);
+        let lock_files = locks(files)?;
         let npmrcs = &shared.npmrcs;
         let manager = self.manager;
         let npm = manager == Manager::Npm;
-        let extract_locks = lock_files.clone();
+        let extract_locks = resolutions(&lock_files);
         let finish_locks = lock_files;
         Ok(Prepared {
             extract: Some(Box::new(move |path, text, out| {
                 let result = if path.ends_with("package.json") {
-                    extract(path, text, manager, extract_locks.as_ref())
+                    extract(path, text, manager, &extract_locks)
                 } else if path.ends_with("pnpm-workspace.yaml") || path.ends_with(".yarnrc.yml") {
                     catalogs(path, text, manager)
                 } else if path.ends_with(".nvmrc") || path.ends_with(".node-version") {
@@ -797,12 +850,8 @@ impl crate::Ecosystem for Descriptor {
                 out.locked
                     .extend(locked::aube(files, &mut out.dependencies, manager, npm)?);
                 if npm {
-                    out.locked.extend(locked::npm(
-                        files,
-                        finish_locks.as_ref(),
-                        &out.dependencies,
-                        npmrcs,
-                    ));
+                    out.locked
+                        .extend(locked::npm(files, &finish_locks, &out.dependencies, npmrcs));
                 }
                 assign_registries(&mut out.dependencies, &mut out.locked, npmrcs);
                 Ok(())

@@ -258,17 +258,17 @@ pub(super) fn extract(
     host: &str,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    let (locations, aliases) = crate::yaml_locations::parse_aliased(text)?;
+    let (locations, aliases) = text.yaml_aliased()?;
     let mut scan = Scan {
         path,
         text,
-        locations: &locations,
-        aliases: &aliases,
+        locations,
+        aliases,
         seen: std::collections::BTreeSet::new(),
         out: Vec::new(),
         skipped,
     };
-    for (doc, document) in crate::yaml::docs(text)?.iter().enumerate() {
+    for (doc, document) in text.yaml_documents()?.iter().enumerate() {
         let Some(map) = document.as_mapping() else {
             continue;
         };

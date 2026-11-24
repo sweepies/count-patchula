@@ -68,6 +68,9 @@ cache:
 - `GET /repos/{repository}/commits?per_page=1` on a repository in the set,
   a private one when there is one, which needs `contents: read`.
 
+The listing and the viewer go out together; the contents read follows once
+the listing names its repository.
+
 The scope is then `{api root}|app:{bot id}/repos:{sha256 of the sorted ids}`
 whatever the selection, so a token narrowed to some repositories never shares
 the full installation's entries even if GitHub called its selection `all`.

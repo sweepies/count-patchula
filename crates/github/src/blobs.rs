@@ -108,14 +108,10 @@ impl Client {
                 .buffer_unordered(self.concurrency())
                 .collect()
                 .await;
-            for (sha, content) in batches
-                .into_iter()
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-            {
-                self.store_blob(repo, &sha, &content).await?;
-                out.insert(sha, content);
+            // Each batch's blobs go to the cache in one write.
+            for batch in batches.into_iter().collect::<Result<Vec<_>>>()? {
+                self.store_blobs(repo, &batch).await?;
+                out.extend(batch);
             }
         }
         let rest: Vec<_> = missing
@@ -191,26 +187,36 @@ impl Client {
             .collect())
     }
 
-    /// Keep `content` as the REST representation of the blob.
-    async fn store_blob(&self, repo: &str, sha: &str, content: &[u8]) -> Result<()> {
-        let body = serde_json::to_vec(&json!({
-            "sha": sha,
-            "encoding": "base64",
-            "content": base64::engine::general_purpose::STANDARD.encode(content),
-        }))
-        .map_err(|_| Error::Json)?;
-        let response = Response {
-            status: StatusCode::OK,
-            headers: HeaderMap::new(),
-            body,
-            stale: None,
-        };
+    /// Keep each blob's content as its REST representation.
+    async fn store_blobs(&self, repo: &str, blobs: &[(String, Vec<u8>)]) -> Result<()> {
+        if blobs.is_empty() {
+            return Ok(());
+        }
+        let now = conditional::unix_now();
+        let entries = blobs
+            .iter()
+            .map(|(sha, content)| {
+                let body = serde_json::to_vec(&json!({
+                    "sha": sha,
+                    "encoding": "base64",
+                    "content": base64::engine::general_purpose::STANDARD.encode(content),
+                }))
+                .map_err(|_| Error::Json)?;
+                let response = Response {
+                    status: StatusCode::OK,
+                    headers: HeaderMap::new(),
+                    body,
+                    stale: None,
+                };
+                Ok((
+                    self.blob_key(repo, sha)?,
+                    conditional::entry(&response, now),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         self.0
             .cache
-            .http_put(
-                &self.blob_key(repo, sha)?,
-                &conditional::entry(&response, conditional::unix_now()),
-            )
+            .http_put_many(&entries)
             .await
             .map_err(|_| Error::Cache)
     }

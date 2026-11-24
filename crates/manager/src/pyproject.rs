@@ -37,27 +37,43 @@ fn pep508(requirement: &str) -> Option<(&str, usize, usize)> {
     (end > start).then_some((name, start, end))
 }
 
-fn resolved(lock: Option<&Document<&str>>, package: &str) -> Option<String> {
-    lock?
-        .get("package")?
-        .as_array_of_tables()?
-        .iter()
-        .find(|p| {
-            p.get("name")
-                .and_then(Item::as_str)
-                .map(patchula_words::pep503)
-                .as_deref()
-                == Some(package)
-        })?
-        .get("version")?
-        .as_str()
-        .map(str::to_owned)
+/// A lockfile's `[[package]]` versions by PEP 503 name: the first package
+/// of each name, and its version when that package states one.
+type LockIndex = std::collections::HashMap<String, Option<String>>;
+
+/// The index of the lockfile `text`, parsed once however many projects
+/// share it.
+fn lock_index(text: &str) -> Result<LockIndex, String> {
+    let lock = Document::parse(text).map_err(|e| toml_error(text, &e))?;
+    let mut index = LockIndex::new();
+    for package in lock
+        .get("package")
+        .and_then(Item::as_array_of_tables)
+        .into_iter()
+        .flat_map(|packages| packages.iter())
+    {
+        if let Some(name) = package.get("name").and_then(Item::as_str) {
+            index
+                .entry(patchula_words::pep503(name))
+                .or_insert_with(|| {
+                    package
+                        .get("version")
+                        .and_then(Item::as_str)
+                        .map(str::to_owned)
+                });
+        }
+    }
+    Ok(index)
+}
+
+fn resolved(lock: Option<&LockIndex>, package: &str) -> Option<String> {
+    lock?.get(package)?.clone()
 }
 
 struct Scan<'a, 'b> {
     path: &'a str,
     text: &'a Lines<'b>,
-    lock: Option<Document<&'b str>>,
+    lock: Option<&'a LockIndex>,
     out: Vec<Dependency>,
     skipped: Vec<Skipped>,
 }
@@ -118,7 +134,7 @@ impl Scan<'_, '_> {
                 ),
                 form: EditForm::Scalar(Syntax::InnerToken),
                 name: name.into(),
-                resolved: resolved(self.lock.as_ref(), &package),
+                resolved: resolved(self.lock, &package),
                 package,
                 kind,
                 current: current.into(),
@@ -176,7 +192,7 @@ impl Scan<'_, '_> {
                 ),
                 form: EditForm::Scalar(Syntax::Toml),
                 name: name.into(),
-                resolved: resolved(self.lock.as_ref(), &package),
+                resolved: resolved(self.lock, &package),
                 package,
                 kind,
                 current: current.into(),
@@ -195,6 +211,7 @@ pub(super) fn extract(
     path: &str,
     text: &Lines<'_>,
     files: &Files,
+    locks: &mut BTreeMap<String, Result<LockIndex, String>>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
     if path.ends_with(".python-version") {
@@ -207,17 +224,22 @@ pub(super) fn extract(
     let discovery = crate::pypi::settings::discover(path, files);
     // The lockfile whose versions are the project's: its own, or its uv
     // workspace root's; a lock above belongs to another project.
-    let lock = discovery
+    let lock = match discovery
         .resolved_lock
         .as_ref()
-        .and_then(|lock| files.get(lock))
-        .map(|text| {
-            let text = text
-                .read()
-                .map_err(|_| "its lockfile, which the Count could not read".to_owned())?;
-            Document::parse(text).map_err(|e| toml_error(text, &e))
-        })
-        .transpose()?;
+        .and_then(|lock| Some((lock, files.get(lock)?)))
+    {
+        Some((path, text)) => {
+            let index = locks.entry(path.clone()).or_insert_with(|| {
+                let text = text
+                    .read()
+                    .map_err(|_| "its lockfile, which the Count could not read".to_owned())?;
+                lock_index(text)
+            });
+            Some(index.as_ref().map_err(Clone::clone)?)
+        }
+        None => None,
+    };
     let mut scan = Scan {
         path,
         text,
@@ -368,9 +390,11 @@ impl crate::Ecosystem for Descriptor {
         files: &'a Files,
         _shared: &'a Shared<'a>,
     ) -> Result<Prepared<'a>, String> {
+        // Each lockfile parsed once, for every project it resolves.
+        let mut locks = BTreeMap::new();
         Ok(Prepared {
             extract: Some(Box::new(move |path, text, out| {
-                let result = extract(path, text, files, &mut out.skipped);
+                let result = extract(path, text, files, &mut locks, &mut out.skipped);
                 file_result(out, path, result);
                 Ok(())
             })),

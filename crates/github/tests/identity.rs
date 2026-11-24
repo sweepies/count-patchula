@@ -25,6 +25,9 @@ struct Installation {
     endless: bool,
     viewer: (u16, Value),
     contents: u16,
+    /// When set, the first listing page and the viewer each wait for the
+    /// other to arrive, and answer 500 if it never does.
+    rendezvous: Option<tokio::sync::Barrier>,
     probed: Mutex<Vec<String>>,
     requests: AtomicUsize,
     other: AtomicUsize,
@@ -37,6 +40,7 @@ impl Installation {
             endless: false,
             viewer: (200, json!({"data":{"viewer":{"databaseId":41}}})),
             contents: 200,
+            rendezvous: None,
             probed: Mutex::new(Vec::new()),
             requests: AtomicUsize::new(0),
             other: AtomicUsize::new(0),
@@ -50,6 +54,21 @@ impl Transport for Installation {
             self.requests.fetch_add(1, Ordering::SeqCst);
             let url = request.url().clone();
             let path = url.path().to_owned();
+            let first_page = path == "/installation/repositories"
+                && !url.query_pairs().any(|(name, _)| name == "page");
+            if let Some(rendezvous) = &self.rendezvous
+                && (first_page || path == "/graphql")
+                && tokio::time::timeout(std::time::Duration::from_secs(5), rendezvous.wait())
+                    .await
+                    .is_err()
+            {
+                return Ok(Response {
+                    status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: Vec::new(),
+                    stale: None,
+                });
+            }
             let mut headers = reqwest::header::HeaderMap::new();
             let (status, body) = if path == "/installation/repositories" {
                 // The reach is never read from the cache.
@@ -148,6 +167,28 @@ async fn an_installation_token_for_a_whole_account_is_scoped_by_its_repository_i
     // The probe reads a private repository's contents, the lowest id first.
     assert_eq!(*transport.probed.lock().unwrap(), ["o7/r2"]);
     // One listing page, the viewer and the probe.
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 3);
+}
+
+/// The listing and the viewer are read at once: each answers only once the
+/// other has arrived, and the token is still scoped by its reach.
+#[tokio::test]
+async fn the_listing_and_the_viewer_are_read_together() {
+    let mut installation = Installation::new(vec![listing(
+        Some("all"),
+        2,
+        vec![listed(1, 7, true), listed(2, 7, false)],
+    )]);
+    installation.rendezvous = Some(tokio::sync::Barrier::new(2));
+    let transport = Arc::new(installation);
+    let client = identified(INSTALLATION_TOKEN, transport.clone(), memory().await).await;
+    assert_eq!(
+        client.credential_scope(),
+        sha256_hex(&format!(
+            "https://api.github.com/|app:41/repos:{}",
+            sha256_hex("1,2")
+        ))
+    );
     assert_eq!(transport.requests.load(Ordering::SeqCst), 3);
 }
 

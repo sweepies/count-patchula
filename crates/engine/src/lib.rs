@@ -398,25 +398,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 23;
+    const VERSION: u32 = 24;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 26;
+    const VERSION: u32 = 27;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 26;
+    const VERSION: u32 = 27;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 23;
+    const VERSION: u32 = 24;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -1388,7 +1388,7 @@ impl Engine {
     ) -> Result<Extraction> {
         let files_scope = FilesScope {
             repository: repo.into(),
-            files_hash: patchula_manager::hash(&serde_json::to_vec(&files)?),
+            files_hash: patchula_manager::hash_json(&files)?,
             config_hash,
         };
         if let Some(saved) = self.cache.state::<FileExtraction>(&files_scope).await? {
@@ -1487,17 +1487,20 @@ impl Engine {
         // The config's local-module closure is the config crate's walk; the
         // module texts it asks for come from the tree's blobs.
         // Symlinks are never read, as in the view: a linked config module
-        // is missing here, not fetched as the link's target text.
-        let shas: BTreeMap<String, String> = entries
-            .iter()
-            .filter(|entry| entry.kind == "blob" && entry.mode != repository::SYMLINK_MODE)
-            .map(|entry| (entry.path.clone(), entry.sha.clone()))
-            .collect();
+        // is missing here, not fetched as the link's target text. A config
+        // reads a few modules, so each is found in the tree as asked rather
+        // than indexing every path.
         let mut read = |module: &str| {
-            let module = module.to_owned();
-            let shas = &shas;
+            let sha = entries
+                .iter()
+                .find(|entry| {
+                    entry.path == module
+                        && entry.kind == "blob"
+                        && entry.mode != repository::SYMLINK_MODE
+                })
+                .map(|entry| entry.sha.as_str());
             async move {
-                match shas.get(&module) {
+                match sha {
                     Some(sha) => self
                         .file(repo, sha)
                         .await
@@ -1532,7 +1535,7 @@ impl Engine {
         // on another commit reuse it.
         let scope = ConfigFilesScope {
             repository: repo.into(),
-            files_hash: patchula_manager::hash(&serde_json::to_vec(&(&path, &files))?),
+            files_hash: patchula_manager::hash_json(&(&path, &files))?,
             // CODE_VERSIONED covers the decoding and validation the schema
             // text does not.
             schema_hash: schema_hash(),

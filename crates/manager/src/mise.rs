@@ -416,7 +416,7 @@ struct Project {
     /// `files` and `exclude` select: mise's `registry_file` role.
     settings: fn(&str) -> bool,
     /// Why a lookup for a tool in a folder fails, given those files.
-    check: fn(&str, &str, &Files, &crate::nuget::Feeds) -> Option<String>,
+    check: fn(&str, &str, &Around<'_>) -> Option<String>,
 }
 
 /// Whether `path` holds registry settings a package backend mise runs
@@ -617,6 +617,10 @@ fn variant(name: &str, stem: &str) -> bool {
 /// configures that ancestor: from there mise reads it in every folder
 /// below.
 fn config_root(path: &str) -> Option<&str> {
+    // Every name below is a `.toml` file.
+    if !path.ends_with(".toml") {
+        return None;
+    }
     let leaf = leaf(path);
     let dir = &path[..path.len() - leaf.len()];
     // A folder form names the directory above the folder.
@@ -690,13 +694,13 @@ fn backends(tool: &str) -> Vec<String> {
 /// The backends a mise configuration could send elsewhere, `*` standing
 /// for every tool; none when the Count cannot read it. Anything but the
 /// plain tables and settings above counts against every tool.
-fn redirected_backends(path: &str, text: &str) -> Option<BTreeSet<String>> {
+fn redirected_backends(path: &str, doc: Option<&Document<&str>>) -> Option<BTreeSet<String>> {
     let mut out = BTreeSet::new();
     if miserc(path) {
         out.insert("*".to_owned());
         return Some(out);
     }
-    let doc = Document::parse(text).ok()?;
+    let doc = doc?;
     for (key, _) in doc.iter() {
         if !PLAIN_TABLES.contains(&key) {
             out.insert("*".to_owned());
@@ -778,6 +782,40 @@ fn related(dir: &str, path: &str) -> bool {
     dir.starts_with(folder) || folder.starts_with(dir)
 }
 
+/// What the redirect checks read around a mise tool, parsed once for every
+/// tool: each mise configuration, and the Cargo manifests and
+/// configurations a cargo backend's check reads.
+pub(crate) struct Around<'f> {
+    files: &'f Files,
+    feeds: &'f crate::nuget::Feeds,
+    configs: BTreeMap<&'f str, std::cell::OnceCell<Option<Document<&'f str>>>>,
+    cargo: std::cell::OnceCell<crate::cargo::Parsed<'f>>,
+}
+
+impl<'f> Around<'f> {
+    pub(crate) fn new(files: &'f Files, feeds: &'f crate::nuget::Feeds) -> Self {
+        Self {
+            files,
+            feeds,
+            configs: BTreeMap::new(),
+            cargo: std::cell::OnceCell::new(),
+        }
+    }
+    /// The mise configuration at `path` as a document, when the Count read
+    /// and parsed it.
+    fn config(&self, path: &str) -> Option<&Document<&'f str>> {
+        let (path, text) = self.files.get_key_value(path)?;
+        let cell = self.configs.get(path.as_str())?;
+        cell.get_or_init(|| Document::parse(text.read().ok()?).ok())
+            .as_ref()
+    }
+    /// Every Cargo manifest, lockfile and configuration, parsed.
+    fn cargo(&self) -> &crate::cargo::Parsed<'f> {
+        self.cargo
+            .get_or_init(|| crate::cargo::parsed(self.files, |_| true))
+    }
+}
+
 /// The first file `related` to `dir` that `test` accepts, as the reason
 /// a lookup there fails. A test sees `Err` for a file the Count did not
 /// read, which may say anything.
@@ -795,12 +833,8 @@ fn found(
 
 /// The project's own npm registry settings in or below `dir`, or above
 /// it, that mise's npm backend reads when it runs there.
-fn npm_project(
-    dir: &str,
-    _tool: &str,
-    files: &Files,
-    _feeds: &crate::nuget::Feeds,
-) -> Option<String> {
+fn npm_project(dir: &str, _tool: &str, around: &Around<'_>) -> Option<String> {
+    let files = around.files;
     found(
         dir,
         files,
@@ -817,12 +851,8 @@ fn npm_project(
 
 /// The project's own Python index settings in or below `dir`, or above
 /// it, that mise's pypi and pipx backends read when they run there.
-fn python_project(
-    dir: &str,
-    _tool: &str,
-    files: &Files,
-    _feeds: &crate::nuget::Feeds,
-) -> Option<String> {
+fn python_project(dir: &str, _tool: &str, around: &Around<'_>) -> Option<String> {
+    let files = around.files;
     found(
         dir,
         files,
@@ -843,18 +873,9 @@ fn python_project(
 /// The project's own Cargo source replacement or registries in or below
 /// `dir`, or above it, that mise's cargo backend reads when it runs
 /// there.
-fn cargo_project(
-    dir: &str,
-    _tool: &str,
-    files: &Files,
-    _feeds: &crate::nuget::Feeds,
-) -> Option<String> {
-    crate::cargo::replaced(
-        files,
-        &crate::cargo::parsed(files, |_| true),
-        &format!("{dir}x"),
-    )
-    .or_else(|| {
+fn cargo_project(dir: &str, _tool: &str, around: &Around<'_>) -> Option<String> {
+    let files = around.files;
+    crate::cargo::replaced(files, around.cargo(), &format!("{dir}x")).or_else(|| {
         found(
             dir,
             files,
@@ -869,12 +890,8 @@ fn cargo_project(
 
 /// The NuGet feeds around `dir` that are not nuget.org's, which mise's
 /// dotnet backend reads when it runs there.
-fn dotnet_project(
-    dir: &str,
-    tool: &str,
-    _files: &Files,
-    feeds: &crate::nuget::Feeds,
-) -> Option<String> {
+fn dotnet_project(dir: &str, tool: &str, around: &Around<'_>) -> Option<String> {
+    let feeds = around.feeds;
     let package = tool.split_once(':').map_or(tool, |(_, name)| name);
     match feeds.origin(&format!("{dir}x"), package) {
         crate::origins::Origin::Index(crate::origins::Named::Public) => None,
@@ -888,18 +905,12 @@ fn dotnet_project(
 /// replacement or registries for cargo, and NuGet feeds for dotnet. One
 /// the Count cannot read counts; a backend whose row states `project:
 /// None` has no such check.
-fn project_redirect(
-    kind: &str,
-    dir: &str,
-    tool: &str,
-    files: &Files,
-    feeds: &crate::nuget::Feeds,
-) -> Option<String> {
+fn project_redirect(kind: &str, dir: &str, tool: &str, around: &Around<'_>) -> Option<String> {
     BACKENDS
         .iter()
         .find(|backend| backend.names.contains(&kind))
         .and_then(|backend| backend.project.as_ref())
-        .and_then(|project| (project.check)(dir, tool, files, feeds))
+        .and_then(|project| (project.check)(dir, tool, around))
 }
 
 /// Why the lookup of the mise tool `dep` cannot be taken to list what mise
@@ -913,9 +924,9 @@ fn project_redirect(
 pub(crate) fn redirected(
     dep: &Dependency,
     configs: &[&str],
-    files: &Files,
-    feeds: &crate::nuget::Feeds,
+    around: &Around<'_>,
 ) -> Option<String> {
+    let files = around.files;
     // An unread config may include any file through `task_config`, from any
     // folder, so it may govern this one however far away it is.
     if let Some(config) = configs
@@ -947,7 +958,7 @@ pub(crate) fn redirected(
         let Some(redirected) = text
             .read()
             .ok()
-            .and_then(|text| redirected_backends(config, text))
+            .and_then(|_| redirected_backends(config, around.config(config)))
         else {
             return Some(Unread::Failed.reason(config));
         };
@@ -964,7 +975,7 @@ pub(crate) fn redirected(
     if task
         && related.iter().any(|config| {
             task_dir.starts_with(config_root(config).unwrap_or_default())
-                && tools_options(config, tool, files)
+                && tools_options(around.config(config), tool)
         })
     {
         return Some(TASK_OPTIONS.into());
@@ -972,17 +983,14 @@ pub(crate) fn redirected(
     dirs.iter().find_map(|dir| {
         kinds
             .iter()
-            .find_map(|kind| project_redirect(kind, dir, tool, files, feeds))
+            .find_map(|kind| project_redirect(kind, dir, tool, around))
     })
 }
 
 /// Whether `config`'s `[tools]` gives `tool` (its name without options)
 /// options: in brackets on the name, or beside the version in a table.
-fn tools_options(config: &str, tool: &str, files: &Files) -> bool {
-    let Some(doc) = files
-        .get(config)
-        .and_then(|text| Document::parse(text.read().ok()?).ok())
-    else {
+fn tools_options(config: Option<&Document<&str>>, tool: &str) -> bool {
+    let Some(doc) = config else {
         return false;
     };
     let optioned = |table: &dyn toml_edit::TableLike| table.iter().any(|(key, _)| key != "version");
@@ -1060,12 +1068,17 @@ impl crate::Ecosystem for Descriptor {
                     .filter(|path| config_file(path))
                     .map(String::as_str)
                     .collect();
+                let mut around = Around::new(files, feeds);
+                around.configs = configs
+                    .iter()
+                    .map(|config| (*config, std::cell::OnceCell::new()))
+                    .collect();
                 for dep in out
                     .dependencies
                     .iter_mut()
                     .filter(|d| d.manager == Manager::Mise && d.source == Source::Mise)
                 {
-                    if let Some(reason) = redirected(dep, &configs, files, feeds) {
+                    if let Some(reason) = redirected(dep, &configs, &around) {
                         dep.registry = origins::Named::Unusable(reason).registry();
                     }
                 }

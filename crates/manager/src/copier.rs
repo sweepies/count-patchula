@@ -50,8 +50,8 @@ pub(super) fn extract(
     text: &Lines<'_>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    let locations = yaml_locations::parse(text)?;
-    let Some(document) = yaml::docs(text)?.into_iter().next() else {
+    let locations = text.yaml_locations()?;
+    let Some(document) = text.yaml_documents()?.first() else {
         return Ok(Vec::new());
     };
     let Some(src) = document.get("_src_path").and_then(|v| v.as_str()) else {

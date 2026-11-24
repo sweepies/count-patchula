@@ -206,9 +206,7 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
 
 /// Whether `path` is a Maven settings file, by its name.
 pub(crate) fn settings_file(path: &str) -> bool {
-    crate::roles::leaf(path)
-        .to_ascii_lowercase()
-        .ends_with("settings.xml")
+    crate::ends_with_lowercase(crate::roles::leaf(path), "settings.xml")
 }
 
 /// Whether `path` is a file the Count reads for Maven repositories by its

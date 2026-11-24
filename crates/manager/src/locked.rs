@@ -229,6 +229,53 @@ fn plain(version: &str) -> &str {
     }
 }
 
+/// Where a lockfile's text first writes each key, indexed in one pass: the
+/// first `'key':` anywhere, else the first `key:` after a newline and two
+/// spaces. A lookup per package from the start of a multi-megabyte lock
+/// would scan it once for every package.
+struct KeyStarts<'t> {
+    /// Each text between one `'` and the next, where that one is followed
+    /// by `:`, to the offset after the first `'`.
+    quoted: std::collections::HashMap<&'t str, usize>,
+    /// Each text from after a newline and two spaces to any `:` on that
+    /// line, to its offset.
+    plain: std::collections::HashMap<&'t str, usize>,
+}
+
+impl<'t> KeyStarts<'t> {
+    fn new(text: &'t str) -> Self {
+        let mut quoted = std::collections::HashMap::new();
+        let quotes: Vec<usize> = text.match_indices('\'').map(|(n, _)| n).collect();
+        for pair in quotes.windows(2) {
+            let (open, close) = (pair[0], pair[1]);
+            if text.as_bytes().get(close + 1) == Some(&b':') {
+                quoted.entry(&text[open + 1..close]).or_insert(open + 1);
+            }
+        }
+        let mut plain = std::collections::HashMap::new();
+        for (n, _) in text.match_indices("\n  ") {
+            let start = n + 3;
+            let line = &text[start..];
+            let line = &line[..line.find('\n').unwrap_or(line.len())];
+            for (colon, _) in line.match_indices(':') {
+                plain.entry(&line[..colon]).or_insert(start);
+            }
+        }
+        Self { quoted, plain }
+    }
+    /// The offset `key` starts at, as `text.find` on either form finds it.
+    /// A key holding a `'` is never one the quoted index splits out, so it
+    /// is searched for.
+    fn start(&self, text: &str, key: &str) -> Option<usize> {
+        let quoted = if key.contains('\'') {
+            text.find(&format!("'{key}':")).map(|n| n + 1)
+        } else {
+            self.quoted.get(key).copied()
+        };
+        quoted.or_else(|| self.plain.get(key).copied())
+    }
+}
+
 /// Reads every `aube-lock.yaml` (pnpm's v9 format: `importers` for each
 /// manifest, `packages` for what they resolve to).
 fn read(files: &Files) -> Result<Aube, String> {
@@ -247,6 +294,7 @@ fn read(files: &Files) -> Result<Aube, String> {
         let lock: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(text).map_err(|e| format!("{path}: {e}"))?;
         let lines = Lines::new(text);
+        let keys = KeyStarts::new(text);
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         let join = |importer: &str| match (dir, importer) {
             ("", ".") => "package.json".to_owned(),
@@ -296,11 +344,7 @@ fn read(files: &Files) -> Result<Aube, String> {
                 else {
                     continue;
                 };
-                let Some(start) = text
-                    .find(&format!("'{key}':"))
-                    .map(|n| n + 1)
-                    .or_else(|| text.find(&format!("\n  {key}:")).map(|n| n + 3))
-                else {
+                let Some(start) = keys.start(text, key) else {
                     continue;
                 };
                 if registry {
@@ -365,4 +409,33 @@ pub(crate) fn aube(
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyStarts;
+
+    /// The index answers what searching the text for each form answers.
+    #[test]
+    fn key_starts_find_what_a_search_finds() {
+        let text = "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      foo:\n        version: 1.0.0\npackages:\n  '@scope/a@1.0.0':\n    resolution: {integrity: sha512-x}\n  foo@1.0.0:\n    resolution: {integrity: sha512-y}\n  b@2.0.0(peer@1.0.0):\n    resolution: {tarball: 'https://x/b.tgz'}\nsnapshots:\n  foo@1.0.0: {}\n  'it''s@1.0.0':\n    {}\n";
+        let keys = KeyStarts::new(text);
+        for key in [
+            "@scope/a@1.0.0",
+            "foo@1.0.0",
+            "b@2.0.0(peer@1.0.0)",
+            "it''s@1.0.0",
+            "it's@1.0.0",
+            "missing@1.0.0",
+            "9.0",
+            ".",
+            "resolution",
+        ] {
+            let searched = text
+                .find(&format!("'{key}':"))
+                .map(|n| n + 1)
+                .or_else(|| text.find(&format!("\n  {key}:")).map(|n| n + 3));
+            assert_eq!(keys.start(text, key), searched, "{key}");
+        }
+    }
 }

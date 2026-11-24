@@ -355,11 +355,15 @@ pub(crate) fn logic_source(path: &str) -> bool {
 /// `included_builds`.
 pub(crate) fn build_logic(path: &str) -> bool {
     let leaf = crate::roles::leaf(path);
-    let in_logic = BUILD_LOGIC
-        .iter()
-        .any(|dir| path.starts_with(dir) || path.contains(&format!("/{dir}")));
+    // A build-logic folder at the root or after any `/`.
+    let in_logic = || {
+        BUILD_LOGIC.iter().any(|dir| {
+            path.match_indices(dir)
+                .any(|(at, _)| at == 0 || path.as_bytes()[at - 1] == b'/')
+        })
+    };
     (leaf.ends_with(".gradle") || leaf.ends_with(".gradle.kts")) && !fixture(path)
-        || in_logic && logic_source(path)
+        || logic_source(path) && in_logic()
 }
 
 /// Whether `path` is in a source set's test or resource folder, where

@@ -4,8 +4,8 @@ use crate::*;
 use patchula_config::join_package;
 
 pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
-    let locations = crate::yaml_locations::parse(text)?;
-    let Some(document) = crate::yaml::docs(text)?.into_iter().next() else {
+    let locations = text.yaml_locations()?;
+    let Some(document) = text.yaml_documents()?.first() else {
         return Ok(Vec::new());
     };
     let Some(dependencies) = document.get("dependencies").and_then(|d| d.as_sequence()) else {
