@@ -41,7 +41,7 @@ workflows:
         - 'docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550'
         - 'docker/setup-qemu-action@v4.4.0'
         - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
-        - 'jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564'
+        - 'jdx/packslip@9d5b1c469ba90d26b6dbd0a0162e84a95da524d5'
 dependencies:
     'actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8':
         ref: 'v4.2.2'
@@ -129,9 +129,9 @@ dependencies:
         commit: 'sha1-b3ef673bd77c5426927fe8836c6185cdae04c2dd'
         owner_id: 216188
         repo_id: 1345301886
-    'jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564':
-        ref: 'v1.11.4'
-        commit: 'sha1-e0340e0c1d10c90a434de2b90f3a1ba345923564'
+    'jdx/packslip@9d5b1c469ba90d26b6dbd0a0162e84a95da524d5':
+        ref: 'v1.11.5'
+        commit: 'sha1-9d5b1c469ba90d26b6dbd0a0162e84a95da524d5'
         owner_id: 216188
         repo_id: 1356006409
         uses:
