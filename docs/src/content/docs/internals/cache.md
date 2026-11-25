@@ -232,7 +232,7 @@ must initialise tracing for the warnings to show.
 - `concurrency` in the [settings](/reference/settings/), or `--concurrency`,
   sets repository scan parallelism (default 8).
 - Registry requests use per-host semaphores, `http.defaultHostConcurrency`
-  (32) each, independent of repository work. `http.hostConcurrency` overrides
+  (64) each, independent of repository work. `http.hostConcurrency` overrides
   single hosts, such as `["api.github.com"] = 8`. Limits must be 1–100.
 - GitHub REST and GraphQL share one governor, sized by the `api.github.com`
   host limit. Without one, a CLI run takes the default host limit capped at
@@ -259,10 +259,12 @@ must initialise tracing for the warnings to show.
 Three settings keep answers reusable past what upstream validators alone would
 allow. The user-facing summary is in [sources](/guide/sources/#fetching-less).
 
-- `http.registryFreshnessSecs` (3600) applies to OCI `tags/list` pages with
-  neither ETag nor Last-Modified. After expiry every page is fetched again, so
-  additions, deletions and retargeting anywhere are seen. Manifest and tag
-  digests keep their upstream policy.
+- `http.registryFreshnessSecs` (3600) applies to OCI `tags/list` pages,
+  whether or not they carry an ETag or Last-Modified: Docker Hub sends an ETag
+  and no max-age, which would otherwise cost a conditional request per page on
+  every run. After expiry every page is revalidated, so additions, deletions
+  and retargeting anywhere are seen. Manifest and tag digests keep their
+  upstream policy.
 - `http.goFreshnessSecs` (3600) applies to public `proxy.golang.org` `@v/list`
   and `@latest`, even when the upstream max-age is shorter. `.info` documents
   keep the upstream policy.
@@ -290,7 +292,13 @@ and `ghcr.io/token`), so an anonymous read there with no live token mints one
 before its first request instead of after a 401, under the same lock, expiry
 and storage rules. It does so only when the read would reach the registry: a
 fresh cached answer needs no token. A failed mint fails the read, as it would
-after the 401. A read under an operator entry keeps the 401 exchange: its
+after the 401. When the registry refuses that just-minted token with a
+challenge naming the same realm and service, the image is treated as missing
+or private (even if the 401 was transient): the token is evicted and the 401
+is returned for that read, with no second mint or read. Concurrent reads of
+the same image that did not mint it themselves, a challenge naming another
+service, or a refusal of a token from memory or the cache still get one
+refresh. A read under an operator entry keeps the 401 exchange: its
 first request carries the entry's own credentials, and its tokens are an
 account's.
 

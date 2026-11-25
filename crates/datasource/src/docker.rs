@@ -62,7 +62,7 @@ fn compact_config(
     .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_CONFIG_NOTES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-config-notes", 4, compact_config);
+    patchula_http::Derived::new("oci-config-notes", 5, compact_config);
 
 /// The config of one image or chart version, as release notes read it.
 struct ImageConfig {
@@ -137,6 +137,13 @@ fn known_realm(host: &str) -> Option<(&'static str, &'static str)> {
         _ => None,
     }
 }
+/// Whether two token service URLs name the same endpoint, ignoring any query.
+fn same_realm(a: &Url, b: &Url) -> bool {
+    let (mut a, mut b) = (a.clone(), b.clone());
+    a.set_query(None);
+    b.set_query(None);
+    a == b
+}
 /// The token service a 401's `WWW-Authenticate: Bearer` challenge names, and
 /// its `service`.
 fn challenge(response: &patchula_http::Response) -> Result<(Url, Option<String>)> {
@@ -186,7 +193,7 @@ fn oci_catalog(tags: Vec<String>) -> Catalog {
 /// The persisted anonymous pull token: the code that picks and expires the
 /// bearer out of a token answer is its compaction, so it carries its own
 /// version like a `Derived` and `tests/derived-versions.tsv` guards it.
-pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 4);
+pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 5);
 fn token_key(host: &str, path: &str) -> Result<HttpKey> {
     Ok(HttpKey::new(
         "GET",
@@ -210,7 +217,7 @@ fn compact_tags(
     serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-tags", 4, compact_tags);
+    patchula_http::Derived::new("oci-tags", 5, compact_tags);
 
 pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     let package = package.strip_prefix("oci://").unwrap_or(package);
@@ -333,6 +340,9 @@ impl Client {
         // and the token service is the one that registry's own 401 names. A
         // failed mint fails the read, as it would after that 401.
         let mut bearer = live(&saved).map(str::to_owned);
+        // The service this call minted a fresh token from before its read, if
+        // it did.
+        let mut minted = None;
         if bearer.is_none()
             && !authenticated
             && let Some((realm, service)) = known_realm(host)
@@ -344,10 +354,18 @@ impl Client {
             }
             let realm = Url::parse(realm).map_err(|_| Error::Invalid)?;
             let pull = self
-                .mint(host, path, realm, Some(service), None, persisted.as_ref())
+                .mint(
+                    host,
+                    path,
+                    realm.clone(),
+                    Some(service),
+                    None,
+                    persisted.as_ref(),
+                )
                 .await?;
             bearer = Some(pull.bearer.clone());
             *saved = Some(pull);
+            minted = Some((realm, service));
         }
         drop(saved);
         let mut response = self
@@ -366,6 +384,16 @@ impl Client {
                 }
                 *saved_token = None;
                 let (realm, service) = challenge(&response)?;
+                // A token this call just minted from the very service the 401
+                // names is as good as a second one would be: the image is
+                // missing or private, so the refusal is the answer.
+                if let Some((minted_realm, minted_service)) = &minted
+                    && same_realm(&realm, minted_realm)
+                    && service.as_deref() == Some(*minted_service)
+                {
+                    drop(saved_token);
+                    return self.answered(host, path, url, read, response).await;
+                }
                 let pull = self
                     .mint(
                         host,

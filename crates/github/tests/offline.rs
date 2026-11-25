@@ -385,6 +385,140 @@ async fn a_graphql_refusal_leaves_blobs_to_rest_but_a_refused_credential_stops()
     ));
 }
 
+/// Batches stay under 512 KiB of known sizes as well as fifty blobs.
+#[tokio::test]
+async fn graphql_blob_batches_are_bounded_by_size_too() {
+    let (_directory, client, transport, shas) = batches("texts", 10).await;
+    // 200 KiB each, below the raw threshold: two fit in 512 KiB, not three.
+    let items: Vec<_> = shas
+        .iter()
+        .map(|sha| (sha.clone(), Some(200 * 1024)))
+        .collect();
+    let blobs = client.blobs_sized("acme/app", &items).await.unwrap();
+    assert_eq!(blobs.len(), 10);
+    assert_eq!(transport.graphql.load(Ordering::SeqCst), 5);
+    assert_eq!(transport.rest.load(Ordering::SeqCst), 0);
+    // A SHA listed twice keeps the size one entry knows; 255 KiB blobs pair
+    // up.
+    let (_directory, client, transport, shas) = batches("texts", 3).await;
+    let items: Vec<_> = shas
+        .iter()
+        .map(|sha| (sha.clone(), Some(255 * 1024)))
+        .chain([(shas[0].clone(), None)])
+        .collect();
+    assert_eq!(
+        client.blobs_sized("acme/app", &items).await.unwrap().len(),
+        3
+    );
+    assert_eq!(transport.graphql.load(Ordering::SeqCst), 2);
+}
+
+/// GitHub serving large blobs: REST's raw media type answers the bytes
+/// (`tampered` ones altered), REST's JSON the base64 form, and GraphQL the
+/// small texts.
+struct Large {
+    texts: BTreeMap<String, Vec<u8>>,
+    tampered: String,
+    raw: AtomicUsize,
+    rest: AtomicUsize,
+    graphql: AtomicUsize,
+}
+impl Transport for Large {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        Box::pin(async move {
+            let body = if request.url().path() == "/graphql" {
+                self.graphql.fetch_add(1, Ordering::SeqCst);
+                let query: Value =
+                    serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+                let mut repository = serde_json::Map::new();
+                for (key, sha) in query["variables"].as_object().unwrap() {
+                    if let Some(index) =
+                        key.strip_prefix('o').filter(|i| i.parse::<usize>().is_ok())
+                    {
+                        let text = String::from_utf8(self.texts[sha.as_str().unwrap()].clone());
+                        repository.insert(
+                            format!("b{index}"),
+                            json!({"text":text.unwrap(),"isBinary":false,"isTruncated":false}),
+                        );
+                    }
+                }
+                serde_json::to_vec(&json!({"data":{"repository":repository}})).unwrap()
+            } else {
+                let sha = request.url().path().rsplit('/').next().unwrap();
+                let content = self.texts[sha].clone();
+                if request.headers()["accept"] == "application/vnd.github.raw+json" {
+                    self.raw.fetch_add(1, Ordering::SeqCst);
+                    if sha == self.tampered {
+                        [content.as_slice(), b"tampered"].concat()
+                    } else {
+                        content
+                    }
+                } else {
+                    self.rest.fetch_add(1, Ordering::SeqCst);
+                    use base64::Engine;
+                    let content = base64::engine::general_purpose::STANDARD.encode(content);
+                    serde_json::to_vec(&json!({"encoding":"base64","content":content})).unwrap()
+                }
+            };
+            Ok(Response {
+                status: reqwest::StatusCode::OK,
+                headers: reqwest::header::HeaderMap::new(),
+                body,
+                stale: None,
+            })
+        })
+    }
+}
+
+/// Blobs of 256 KiB or more come as raw bytes, beside the GraphQL batch of
+/// the small ones, and count only when they hash to their SHA; they are
+/// kept as the REST representation, so the next read needs no request.
+#[tokio::test]
+async fn large_blobs_come_raw_and_only_when_they_hash_to_the_sha() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = Cache::open(
+        directory.path().join("cache.sqlite"),
+        CacheOptions::default(),
+    )
+    .await
+    .unwrap();
+    let large = vec![b'a'; 300 * 1024];
+    let tampered = vec![b'b'; 256 * 1024];
+    let small = b"small\n".to_vec();
+    let texts: BTreeMap<_, _> = [&large, &tampered, &small]
+        .into_iter()
+        .map(|content| (blob_sha(content), content.clone()))
+        .collect();
+    let items: Vec<_> = texts
+        .iter()
+        .map(|(sha, content)| (sha.clone(), Some(content.len() as u64)))
+        .collect();
+    let transport = Arc::new(Large {
+        texts: texts.clone(),
+        tampered: blob_sha(&tampered),
+        raw: AtomicUsize::new(0),
+        rest: AtomicUsize::new(0),
+        graphql: AtomicUsize::new(0),
+    });
+    let client =
+        Client::with_transport(TOKEN, cache, Options::default(), transport.clone()).unwrap();
+    let blobs = client.blobs_sized("acme/app", &items).await.unwrap();
+    assert_eq!(blobs, texts);
+    assert_eq!(transport.raw.load(Ordering::SeqCst), 2);
+    assert_eq!(transport.graphql.load(Ordering::SeqCst), 1);
+    // The tampered raw answer is not taken; REST's JSON gives the blob.
+    assert_eq!(transport.rest.load(Ordering::SeqCst), 1);
+    assert_eq!(client.blobs_sized("acme/app", &items).await.unwrap(), texts);
+    let cached = client
+        .get_immutable_response(&format!("repos/acme/app/git/blobs/{}", blob_sha(&large)))
+        .await
+        .unwrap();
+    assert_eq!(cached.status, 200);
+    assert_eq!(transport.raw.load(Ordering::SeqCst), 2);
+    assert_eq!(transport.graphql.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.rest.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test(start_paused = true)]
 async fn secondary_limit_has_exponential_backoff_and_report_stats() {
     let (_directory, client, replay) = client("secondary", Options::default()).await;

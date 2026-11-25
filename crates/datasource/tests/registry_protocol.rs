@@ -97,6 +97,7 @@ async fn lexical_pagination_is_complete_and_conditional_links_survive_304() {
                 r#"{"tags":["1.0"]}"#,
                 &[
                     ("etag", "\"tags\""),
+                    ("cache-control", "no-cache"),
                     (
                         "link",
                         "</v2/spec/image/tags/list?n=1000&last=1.0>; rel=\"next\"",
@@ -109,7 +110,7 @@ async fn lexical_pagination_is_complete_and_conditional_links_survive_304() {
             response(
                 200,
                 r#"{"tags":["2.0-alpine","2.0-bookworm"]}"#,
-                &[("etag", "\"tags\"")],
+                &[("etag", "\"tags\""), ("cache-control", "no-cache")],
             ),
         ),
         (a.into(), response(304, "", &[])),
@@ -187,7 +188,11 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
         hub_token("spec"),
         (
             tags.into(),
-            response(200, r#"{"tags":["1.0"]}"#, &[("etag", "\"tags\"")]),
+            response(
+                200,
+                r#"{"tags":["1.0"]}"#,
+                &[("etag", "\"tags\""), ("cache-control", "no-cache")],
+            ),
         ),
         (
             manifest.into(),
@@ -227,7 +232,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_cache::representation("oci-tags", 4));
+    .representation(&patchula_cache::representation("oci-tags", 5));
     let fetched = cache.http_get(&key).await.unwrap().unwrap().fetched_at;
     assert_eq!(
         sources
@@ -362,7 +367,11 @@ async fn a_fresh_catalog_clears_stale_provenance_after_a_short_limit() {
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
             tags.into(),
-            response(200, r#"{"tags":["1.0"]}"#, &[("etag", "\"tags\"")]),
+            response(
+                200,
+                r#"{"tags":["1.0"]}"#,
+                &[("etag", "\"tags\""), ("cache-control", "no-cache")],
+            ),
         ),
         (tags.into(), response(429, "", &[("retry-after", "0")])),
         (tags.into(), response(304, "", &[])),
@@ -483,7 +492,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_cache::representation("oci-tags", 4));
+    .representation(&patchula_cache::representation("oci-tags", 5));
     let entry = cache.http_get(&key).await.unwrap().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&entry.body).unwrap(),
@@ -769,7 +778,7 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
     .unwrap()
     .representation(&patchula_cache::representation(
         "anonymous-registry-pull-token",
-        4,
+        5,
     ));
     assert!(cache.http_get(&key).await.unwrap().is_none());
     assert!(steps.0.lock().unwrap().is_empty());
@@ -2001,6 +2010,142 @@ async fn a_failed_token_before_the_first_read_fails_the_read() {
         "{error}"
     );
     assert_eq!(logged.log().len(), 1);
+}
+
+const HUB_TOKEN: &str = "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fspec%3Apull";
+const HUB_MANIFEST: &str = "https://registry-1.docker.io/v2/library/spec/manifests/1.0";
+fn hub_challenge(service: &str) -> Response {
+    response(
+        401,
+        "",
+        &[(
+            "www-authenticate",
+            format!(r#"Bearer realm="https://auth.docker.io/token",service="{service}""#).as_str(),
+        )],
+    )
+}
+fn token_answer(token: &str) -> Response {
+    response(
+        200,
+        &format!(r#"{{"token":"{token}","expires_in":300}}"#),
+        &[],
+    )
+}
+
+/// A missing or private image refuses even the token minted for it a moment
+/// ago, with the same challenge. That refusal is the answer: no second mint
+/// and no second read, and the refused token is dropped, so the next client
+/// mints its own.
+#[tokio::test]
+async fn a_refused_fresh_token_is_not_minted_again() {
+    let logged = Logged::new([
+        (HUB_TOKEN.to_owned(), token_answer("anonymous-one")),
+        (HUB_MANIFEST.to_owned(), hub_challenge("registry.docker.io")),
+        (HUB_TOKEN.to_owned(), token_answer("anonymous-two")),
+        (
+            HUB_MANIFEST.to_owned(),
+            response(200, "", &[("docker-content-digest", DIGEST)]),
+        ),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let error = auth_client_with_transport(logged.clone(), dir.path())
+        .await
+        .registry_digest("spec", "1.0")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            patchula_datasource::Error::Http(patchula_http::CacheError::Status(401))
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        logged.log(),
+        [
+            ("GET".into(), HUB_TOKEN.into(), None),
+            (
+                "HEAD".into(),
+                HUB_MANIFEST.into(),
+                Some("Bearer anonymous-one".into())
+            ),
+        ]
+    );
+    let client = auth_client_with_transport(logged.clone(), dir.path()).await;
+    assert_eq!(client.registry_digest("spec", "1.0").await.unwrap(), DIGEST);
+    assert_eq!(
+        logged.log()[2..],
+        [
+            ("GET".into(), HUB_TOKEN.into(), None),
+            (
+                "HEAD".into(),
+                HUB_MANIFEST.into(),
+                Some("Bearer anonymous-two".into())
+            ),
+        ]
+    );
+    assert!(logged.finished());
+}
+
+/// A token from an earlier client that the registry refuses is replaced
+/// once: it was not minted for this read.
+#[tokio::test]
+async fn a_refused_cached_token_is_minted_again_once() {
+    let digest = || response(200, "", &[("docker-content-digest", DIGEST)]);
+    let logged = Logged::new([
+        (HUB_TOKEN.to_owned(), token_answer("anonymous-one")),
+        (HUB_MANIFEST.to_owned(), digest()),
+        (HUB_MANIFEST.to_owned(), hub_challenge("registry.docker.io")),
+        (HUB_TOKEN.to_owned(), token_answer("anonymous-two")),
+        (HUB_MANIFEST.to_owned(), digest()),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    for _ in 0..2 {
+        let client = auth_client_with_transport(logged.clone(), dir.path()).await;
+        assert_eq!(client.registry_digest("spec", "1.0").await.unwrap(), DIGEST);
+    }
+    let bearer = |token: &str| Some(format!("Bearer {token}"));
+    assert_eq!(
+        logged.log(),
+        [
+            ("GET".into(), HUB_TOKEN.into(), None),
+            ("HEAD".into(), HUB_MANIFEST.into(), bearer("anonymous-one")),
+            ("HEAD".into(), HUB_MANIFEST.into(), bearer("anonymous-one")),
+            ("GET".into(), HUB_TOKEN.into(), None),
+            ("HEAD".into(), HUB_MANIFEST.into(), bearer("anonymous-two")),
+        ]
+    );
+    assert!(logged.finished());
+}
+
+/// A refusal of a fresh token that names another service than the one it
+/// was minted from is followed once, with a token from the named service.
+#[tokio::test]
+async fn a_fresh_token_refused_for_another_service_is_replaced_once() {
+    let other = "https://auth.docker.io/token?service=other.docker.io&scope=repository%3Alibrary%2Fspec%3Apull";
+    let logged = Logged::new([
+        (HUB_TOKEN.to_owned(), token_answer("anonymous-one")),
+        (HUB_MANIFEST.to_owned(), hub_challenge("other.docker.io")),
+        (other.to_owned(), token_answer("anonymous-two")),
+        (
+            HUB_MANIFEST.to_owned(),
+            response(200, "", &[("docker-content-digest", DIGEST)]),
+        ),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let client = auth_client_with_transport(logged.clone(), dir.path()).await;
+    assert_eq!(client.registry_digest("spec", "1.0").await.unwrap(), DIGEST);
+    let bearer = |token: &str| Some(format!("Bearer {token}"));
+    assert_eq!(
+        logged.log(),
+        [
+            ("GET".into(), HUB_TOKEN.into(), None),
+            ("HEAD".into(), HUB_MANIFEST.into(), bearer("anonymous-one")),
+            ("GET".into(), other.into(), None),
+            ("HEAD".into(), HUB_MANIFEST.into(), bearer("anonymous-two")),
+        ]
+    );
+    assert!(logged.finished());
 }
 
 async fn auth_client_with_transport(transport: Arc<Logged>, dir: &std::path::Path) -> Client {

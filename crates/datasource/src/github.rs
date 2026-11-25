@@ -57,7 +57,7 @@ fn compact_release_head(
     >(body)?)
 }
 pub(crate) const GITHUB_RELEASE_HEAD: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("github-release-head", 13, compact_release_head);
+    patchula_http::Derived::new("github-release-head", 14, compact_release_head);
 
 /// The newest release's identity on a release source; a change refetches
 /// history. `None` records a source with no releases.
@@ -70,7 +70,7 @@ pub(crate) struct SourceHeadScope {
 }
 impl State for SourceHead {
     const NAMESPACE: &'static str = "source-head";
-    const VERSION: u32 = 13;
+    const VERSION: u32 = 14;
     // Code-versioned: the stored fingerprint holds the newest release's
     // fields as this build picks them, an entry built by code that picked
     // differently must not compare equal.
@@ -87,7 +87,7 @@ pub(crate) struct TagCatalogScope {
 }
 impl State for TagCatalog {
     const NAMESPACE: &'static str = "tag-catalog";
-    const VERSION: u32 = 13;
+    const VERSION: u32 = 14;
     // Code-versioned: the fingerprint in the key names the refs, not the
     // catalog this build's peel-and-map code derived from them.
     const CODE_VERSIONED: bool = true;
@@ -103,7 +103,7 @@ pub(crate) struct TagObjectScope {
 }
 impl State for TagObject {
     const NAMESPACE: &'static str = "tag-object";
-    const VERSION: u32 = 13;
+    const VERSION: u32 = 14;
     // Code-versioned: the stored version is this build's decode of the
     // object the scope's sha names.
     const CODE_VERSIONED: bool = true;
@@ -497,15 +497,24 @@ impl Client {
             .await;
         chunks.into_iter().flatten().collect()
     }
-    /// One GraphQL query for up to eight repositories' tags; a tag it does
-    /// not resolve falls back to the REST lookup, those side by side.
+    /// One GraphQL query for up to eight repositories' refs. Each ref is
+    /// asked for as a tag and as a bare expression, which also resolves
+    /// branches and commit SHAs; a tag wins over a branch of the same name.
+    /// A ref the returned repository answers neither way does not exist. Any
+    /// other ref the query leaves unresolved falls back to the REST lookup,
+    /// those side by side.
     async fn fresh_tag_chunk(&self, chunk: &[(String, String)]) -> TagDigests {
         let mut declarations = Vec::new();
         let mut fields = Vec::new();
         let mut variables = serde_json::Map::new();
         let mut repositories = BTreeMap::<&str, Vec<usize>>::new();
         let mut locations = BTreeMap::new();
-        for (i, (package, _)) in chunk.iter().enumerate() {
+        for (i, (package, reference)) in chunk.iter().enumerate() {
+            // Invalid refs stay out of GraphQL so `digest` reports `Error::Invalid`
+            // instead of GraphQL answering null and turning them into NotFound.
+            if reference.is_empty() || reference.contains(['?', '#']) {
+                continue;
+            }
             repositories.entry(package).or_default().push(i);
         }
         for (r, (package, indices)) in repositories.into_iter().enumerate() {
@@ -517,10 +526,12 @@ impl Client {
             variables.insert(format!("n{r}"), json!(name));
             let mut objects = Vec::new();
             for i in indices {
-                declarations.push(format!("$e{i}:String!"));
+                declarations.push(format!("$e{i}:String!,$r{i}:String!"));
                 variables.insert(format!("e{i}"), json!(format!("refs/tags/{}", chunk[i].1)));
+                variables.insert(format!("r{i}"), json!(chunk[i].1));
                 objects.push(format!(
-                    "t{i}:object(expression:$e{i}){{{GIT_OBJECT_FIELDS}}}"
+                    "t{i}:object(expression:$e{i}){{{GIT_OBJECT_FIELDS}}} \
+                     c{i}:object(expression:$r{i}){{{GIT_OBJECT_FIELDS}}}"
                 ));
                 locations.insert(i, r);
             }
@@ -529,31 +540,56 @@ impl Client {
                 objects.join(" ")
             ));
         }
-        let query = format!(
-            "query FreshTagDigests({}){{{}}}",
-            declarations.join(","),
-            fields.join(" ")
-        );
-        let data = self
-            .github
-            .graphql::<Value>(&query, Value::Object(variables))
-            .await;
+        let data = if fields.is_empty() {
+            Err(patchula_github::Error::Graphql(String::new()))
+        } else {
+            let query = format!(
+                "query FreshTagDigests({}){{{}}}",
+                declarations.join(","),
+                fields.join(" ")
+            );
+            self.github
+                .graphql::<Value>(&query, Value::Object(variables))
+                .await
+        };
         let mut resolved = TagDigests::new();
         let mut missing = Vec::new();
         for (i, key) in chunk.iter().enumerate() {
-            let sha = data
-                .as_ref()
-                .ok()
-                .and_then(|data| {
-                    locations
-                        .get(&i)
-                        .and_then(|r| peel(&data[format!("r{r}")][format!("t{i}")]))
-                })
-                .and_then(|commit| commit["oid"].as_str())
-                .filter(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            let repository = data.as_ref().ok().and_then(|data| {
+                locations
+                    .get(&i)
+                    .and_then(|r| data.get(format!("r{r}")))
+                    .and_then(Value::as_object)
+            });
+            let commit_sha = |field: String| {
+                repository
+                    .and_then(|repository| repository.get(&field))
+                    .and_then(peel)
+                    .and_then(|commit| commit["oid"].as_str())
+                    .filter(|sha| {
+                        sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+            };
+            let sha = commit_sha(format!("t{i}")).or_else(|| commit_sha(format!("c{i}")));
+            // Both fields present and null: GitHub read the repository and
+            // found no such ref. A field left out says nothing.
+            let absent = repository.is_some_and(|repository| {
+                [format!("t{i}"), format!("c{i}")]
+                    .iter()
+                    .all(|field| repository.get(field) == Some(&Value::Null))
+            });
             match sha {
                 Some(sha) => {
                     resolved.insert(key.clone(), Ok(sha.to_owned()));
+                }
+                None if absent => {
+                    resolved.insert(
+                        key.clone(),
+                        Err(Failure {
+                            kind: LookupErrorKind::NotFound,
+                            message: format!("ref {} not found", key.1),
+                        }),
+                    );
                 }
                 None => missing.push(key.clone()),
             }
@@ -623,12 +659,14 @@ fn peel(value: &Value) -> Option<&Value> {
 
 /// The most repositories one tag-digest document asks about.
 const REPOSITORIES_PER_QUERY: usize = 8;
-/// The most tags one tag-digest document asks about.
-const TAGS_PER_QUERY: usize = 64;
+/// The most refs one tag-digest document asks about. Each ref emits two
+/// `object(expression:)` fields (tag and bare expression), keeping the query
+/// at most 64 object lookups.
+const TAGS_PER_QUERY: usize = 32;
 
 /// Tag keys grouped into documents. A query's cost grows with the
 /// repositories in it, so a document asks about at most eight repositories
-/// and 64 tags; a repository with more tags is split across documents.
+/// and 32 refs; a repository with more refs is split across documents.
 /// Owned groups: a closure over borrowed slices is not general enough for
 /// the server's boxed Send futures.
 fn tag_groups(keys: &BTreeSet<(String, String)>) -> Vec<Vec<(String, String)>> {

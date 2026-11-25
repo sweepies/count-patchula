@@ -398,25 +398,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 25;
+    const VERSION: u32 = 26;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 28;
+    const VERSION: u32 = 29;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 28;
+    const VERSION: u32 = 29;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 25;
+    const VERSION: u32 = 26;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -1566,11 +1566,12 @@ struct Remote<'a> {
 
 impl repository::Source for Remote<'_> {
     async fn read(&mut self, entries: &[repository::Entry]) -> repository::Contents {
-        let shas: Vec<String> = entries
+        // Sizes let the client read large blobs raw and bound its batches.
+        let items: Vec<(String, Option<u64>)> = entries
             .iter()
-            .filter_map(|entry| entry.sha.clone())
+            .filter_map(|entry| entry.sha.clone().map(|sha| (sha, entry.size)))
             .collect();
-        let contents = self.client.blobs(self.repo, &shas).await?;
+        let contents = self.client.blobs_sized(self.repo, &items).await?;
         let mut out = Vec::with_capacity(entries.len());
         let mut missing = false;
         for entry in entries {

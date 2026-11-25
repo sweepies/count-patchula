@@ -305,6 +305,113 @@ async fn cached_catalogs_do_not_freeze_mutable_lightweight_or_annotated_tag_targ
     }
 }
 
+/// A branch and a ref that does not exist resolve in the one tag query,
+/// without a REST commit read; when the query fails, both go to REST.
+#[tokio::test]
+async fn branches_and_missing_refs_resolve_in_the_tag_query() {
+    use patchula_words::LookupErrorKind;
+    struct Refs {
+        graphql_fails: bool,
+        requests: Mutex<Vec<String>>,
+    }
+    impl Transport for Refs {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async move {
+                let path = request.url().path().to_owned();
+                self.requests.lock().unwrap().push(path.clone());
+                let ok = |status: u16, body: serde_json::Value| Response {
+                    status: reqwest::StatusCode::from_u16(status).unwrap(),
+                    headers: Default::default(),
+                    body: serde_json::to_vec(&body).unwrap(),
+                    stale: None,
+                };
+                if path == "/graphql" {
+                    if self.graphql_fails {
+                        return Ok(ok(200, json!({"errors":[{"message":"boom"}]})));
+                    }
+                    let body: serde_json::Value =
+                        serde_json::from_slice(request.body().unwrap().as_bytes().unwrap())
+                            .unwrap();
+                    let mut repository = serde_json::Map::new();
+                    for i in 0..2 {
+                        let reference = body["variables"][format!("r{i}")].as_str().unwrap();
+                        assert_eq!(
+                            body["variables"][format!("e{i}")],
+                            format!("refs/tags/{reference}")
+                        );
+                        repository.insert(format!("t{i}"), serde_json::Value::Null);
+                        repository.insert(
+                            format!("c{i}"),
+                            if reference == "main" {
+                                json!({"__typename":"Commit","oid":"d".repeat(40)})
+                            } else {
+                                serde_json::Value::Null
+                            },
+                        );
+                    }
+                    return Ok(ok(200, json!({"data":{"r0":repository}})));
+                }
+                Ok(match path.as_str() {
+                    "/repos/example/tool/commits/main" => ok(200, json!({"sha":"d".repeat(40)})),
+                    "/repos/example/tool/commits/gone" => ok(404, json!({"message":"Not Found"})),
+                    other => panic!("unexpected request {other}"),
+                })
+            })
+        }
+    }
+    let keys = std::collections::BTreeSet::from([
+        ("example/tool".to_owned(), "main".to_owned()),
+        ("example/tool".to_owned(), "gone".to_owned()),
+    ]);
+    for graphql_fails in [false, true] {
+        let cache = memory().await;
+        let transport = Arc::new(Refs {
+            graphql_fails,
+            requests: Mutex::default(),
+        });
+        let github = patchula_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            transport.clone(),
+        )
+        .unwrap();
+        let source = Client::new(
+            github,
+            patchula_datasource::cached(cache.clone(), transport.clone(), 4).unwrap(),
+            cache,
+        );
+        let digests = source.fresh_tag_digests(&keys).await;
+        assert_eq!(
+            digests[&("example/tool".to_owned(), "main".to_owned())]
+                .as_ref()
+                .unwrap(),
+            &"d".repeat(40)
+        );
+        assert_eq!(
+            digests[&("example/tool".to_owned(), "gone".to_owned())]
+                .as_ref()
+                .unwrap_err()
+                .kind,
+            LookupErrorKind::NotFound
+        );
+        let mut requests = transport.requests.lock().unwrap().clone();
+        requests.sort();
+        if graphql_fails {
+            assert_eq!(
+                requests,
+                [
+                    "/graphql",
+                    "/repos/example/tool/commits/gone",
+                    "/repos/example/tool/commits/main"
+                ]
+            );
+        } else {
+            assert_eq!(requests, ["/graphql"]);
+        }
+    }
+}
+
 #[tokio::test]
 async fn releases_github_marks_as_prereleases_stay_out_whichever_source_answers() {
     for lost in [false, true] {
