@@ -210,9 +210,9 @@ checksum = "sha256:c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc
 url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-aarch64.zip"
 
 [[tools."cargo:nu-lint"]]
-version = "1.7.1"
+version = "1.9.2"
 backend = "cargo:nu-lint"
-specifiers = ["1.7.1"]
+specifiers = ["1.9.2"]
 
 [[tools.communique]]
 version = "1.8.0"
