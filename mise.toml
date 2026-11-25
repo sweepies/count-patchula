@@ -5,7 +5,7 @@ usage = "7.4.0"
 tak = "0.0.15"
 zig = "0.17.0"
 # File tasks with real logic are nu scripts.
-nu = "0.116.1"
+nu = "0.117.0"
 node = "26.13.0"
 go = "1.27.4"
 # hk runs the linters in hk.pkl from the git hooks and from CI.
