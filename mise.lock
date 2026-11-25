@@ -266,39 +266,39 @@ signer = "sigstore-oidc:https://github.com/jdx/communique/.github/workflows/rele
 repository_ids = { repository = "1155542902" }
 
 [[tools."forgejo:wvhulle/nu-lint"]]
-version = "1.7.1"
+version = "1.9.2"
 backend = "forgejo:wvhulle/nu-lint"
-specifiers = ["1.7.1"]
+specifiers = ["1.9.2"]
 
 [tools."forgejo:wvhulle/nu-lint"."platforms.linux-arm64"]
-checksum = "sha256:db029ad9d4c9e5f89548e540dcc721bb4079d658189f0f5072bb8220fd53c987"
-url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://codeberg.org/attachments/919c6a5f-b29f-442f-bf03-6b928d6e1fee"
+checksum = "sha256:3ffdc27b7e54929cb7652432c8817072ccf4515daa7d3c34d13ccb758b29d239"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.9.2/nu-lint-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/27b18977-5207-40c8-9998-84181e9e2051"
 
 [tools."forgejo:wvhulle/nu-lint"."platforms.linux-arm64-musl"]
-checksum = "sha256:db029ad9d4c9e5f89548e540dcc721bb4079d658189f0f5072bb8220fd53c987"
-url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://codeberg.org/attachments/919c6a5f-b29f-442f-bf03-6b928d6e1fee"
+checksum = "sha256:3ffdc27b7e54929cb7652432c8817072ccf4515daa7d3c34d13ccb758b29d239"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.9.2/nu-lint-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/27b18977-5207-40c8-9998-84181e9e2051"
 
 [tools."forgejo:wvhulle/nu-lint"."platforms.linux-x64"]
-checksum = "sha256:cc1ea09d6b182c45d954114d6543fdcf4dbb53af707065ccfd3fa6505b0d8bd4"
-url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://codeberg.org/attachments/b2563b0c-7911-4917-aae4-1f3fff7ed809"
+checksum = "sha256:7aafc926141dec9a3a7019b856d09506d1c7874e4b077466548acd0e9b386e9a"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.9.2/nu-lint-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/86c5413f-d601-43fd-a102-db0013772404"
 
 [tools."forgejo:wvhulle/nu-lint"."platforms.linux-x64-baseline"]
-checksum = "sha256:cc1ea09d6b182c45d954114d6543fdcf4dbb53af707065ccfd3fa6505b0d8bd4"
-url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://codeberg.org/attachments/b2563b0c-7911-4917-aae4-1f3fff7ed809"
+checksum = "sha256:7aafc926141dec9a3a7019b856d09506d1c7874e4b077466548acd0e9b386e9a"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.9.2/nu-lint-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/86c5413f-d601-43fd-a102-db0013772404"
 
 [tools."forgejo:wvhulle/nu-lint"."platforms.linux-x64-musl"]
-checksum = "sha256:cc1ea09d6b182c45d954114d6543fdcf4dbb53af707065ccfd3fa6505b0d8bd4"
-url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://codeberg.org/attachments/b2563b0c-7911-4917-aae4-1f3fff7ed809"
+checksum = "sha256:7aafc926141dec9a3a7019b856d09506d1c7874e4b077466548acd0e9b386e9a"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.9.2/nu-lint-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/86c5413f-d601-43fd-a102-db0013772404"
 
 [tools."forgejo:wvhulle/nu-lint"."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:cc1ea09d6b182c45d954114d6543fdcf4dbb53af707065ccfd3fa6505b0d8bd4"
-url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://codeberg.org/attachments/b2563b0c-7911-4917-aae4-1f3fff7ed809"
+checksum = "sha256:7aafc926141dec9a3a7019b856d09506d1c7874e4b077466548acd0e9b386e9a"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.9.2/nu-lint-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/86c5413f-d601-43fd-a102-db0013772404"
 
 [[tools.gh]]
 version = "2.103.3"
