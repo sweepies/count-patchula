@@ -11,7 +11,7 @@ go = "1.27.4"
 # hk runs the linters in hk.pkl from the git hooks and from CI.
 hk = "2.10.0"
 pkl = "0.32.2"
-jactionlint = "2.4.0"
+jactionlint = "2.6.0"
 betterleaks = "1.10.1"
 zizmor = "1.31.1"
 # nu-lint publishes Linux builds only, on Codeberg; macOS builds it from crates.io.
