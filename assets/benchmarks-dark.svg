@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 434" width="760" height="434" role="img" aria-label="Count Patchula vs Renovate 44.261.0 benchmarks">
+  <title>Count Patchula vs Renovate 44.261.0 Benchmarks</title>
+  <rect x="1" y="1" width="758" height="432" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Header -->
+  <text x="24" y="33" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="700">Count Patchula vs Renovate 44.261.0</text>
+  <text x="24" y="51" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5">Six large public repositories · read-only lookup · 4 vCPU VM</text>
+
+  <!-- Legend -->
+  <circle cx="526" cy="39" r="4.5" fill="#e85a4f"/>
+  <text x="537" y="43" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">Count Patchula</text>
+  <circle cx="662" cy="39" r="4.5" fill="#484f58"/>
+  <text x="673" y="43" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12">Renovate</text>
+
+  <line x1="24" y1="66" x2="736" y2="66" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Row 1: All six repositories, cold -->
+  <text x="24" y="92" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600">All six repositories<tspan fill="#8b949e" font-weight="400"> · cold</tspan></text>
+  <rect x="634" y="76" width="102" height="22" rx="11" fill="#321c1d" stroke="#7a3531" stroke-width="1"/>
+  <text x="685" y="91" text-anchor="middle" fill="#ff9f95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">31.7× faster</text>
+
+  <text x="24" y="117" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600">Patchula</text>
+  <rect x="96" y="106" width="540" height="14" rx="4" fill="#21262d"/>
+  <rect x="96" y="106" width="17" height="14" rx="4" fill="#e85a4f"/>
+  <text x="736" y="117" text-anchor="end" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700">42.6 s</text>
+
+  <text x="24" y="137" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5">Renovate</text>
+  <rect x="96" y="126" width="540" height="14" rx="4" fill="#484f58"/>
+  <text x="736" y="137" text-anchor="end" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12">1,351.2 s</text>
+
+  <line x1="24" y1="154" x2="736" y2="154" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Row 2: All six repositories, warm -->
+  <text x="24" y="172" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600">All six repositories<tspan fill="#8b949e" font-weight="400"> · warm</tspan></text>
+  <rect x="634" y="156" width="102" height="22" rx="11" fill="#321c1d" stroke="#7a3531" stroke-width="1"/>
+  <text x="685" y="171" text-anchor="middle" fill="#ff9f95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">61.7× faster</text>
+
+  <text x="24" y="197" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600">Patchula</text>
+  <rect x="96" y="186" width="540" height="14" rx="4" fill="#21262d"/>
+  <rect x="96" y="186" width="9" height="14" rx="4" fill="#e85a4f"/>
+  <text x="736" y="197" text-anchor="end" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700">6.4 s</text>
+
+  <text x="24" y="217" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5">Renovate</text>
+  <rect x="96" y="206" width="540" height="14" rx="4" fill="#484f58"/>
+  <text x="736" y="217" text-anchor="end" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12">392.1 s</text>
+
+  <line x1="24" y1="234" x2="736" y2="234" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Row 3: grafana/grafana, cold -->
+  <text x="24" y="252" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600">grafana/grafana<tspan fill="#8b949e" font-weight="400"> · cold</tspan></text>
+  <rect x="634" y="236" width="102" height="22" rx="11" fill="#321c1d" stroke="#7a3531" stroke-width="1"/>
+  <text x="685" y="251" text-anchor="middle" fill="#ff9f95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">90.8× faster</text>
+
+  <text x="24" y="277" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600">Patchula</text>
+  <rect x="96" y="266" width="540" height="14" rx="4" fill="#21262d"/>
+  <rect x="96" y="266" width="6" height="14" rx="3" fill="#e85a4f"/>
+  <text x="736" y="277" text-anchor="end" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700">10.5 s</text>
+
+  <text x="24" y="297" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5">Renovate</text>
+  <rect x="96" y="286" width="540" height="14" rx="4" fill="#484f58"/>
+  <text x="736" y="297" text-anchor="end" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12">954.7 s</text>
+
+  <line x1="24" y1="314" x2="736" y2="314" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Row 4: Peak memory, grafana/grafana cold -->
+  <text x="24" y="332" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600">Peak memory<tspan fill="#8b949e" font-weight="400"> · grafana/grafana cold</tspan></text>
+  <rect x="634" y="316" width="102" height="22" rx="11" fill="#322816" stroke="#7d5c21" stroke-width="1"/>
+  <text x="685" y="331" text-anchor="middle" fill="#f2b544" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">16.5× less</text>
+
+  <text x="24" y="357" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600">Patchula</text>
+  <rect x="96" y="346" width="540" height="14" rx="4" fill="#21262d"/>
+  <rect x="96" y="346" width="33" height="14" rx="4" fill="#f2b544"/>
+  <text x="736" y="357" text-anchor="end" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700">257 MB</text>
+
+  <text x="24" y="377" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5">Renovate</text>
+  <rect x="96" y="366" width="540" height="14" rx="4" fill="#484f58"/>
+  <text x="736" y="377" text-anchor="end" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12">4.1 GB</text>
+
+  <line x1="24" y1="396" x2="736" y2="396" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Footer -->
+  <text x="24" y="417" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">Lower is better · mastodon, sentry, grafana, monica, jellyfin, kafka</text>
+  <text x="736" y="417" text-anchor="end" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">2026-11-25 · 955ff81a</text>
+</svg>
