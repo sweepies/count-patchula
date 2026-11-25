@@ -12,7 +12,7 @@ go = "1.27.4"
 hk = "2.10.0"
 pkl = "0.32.2"
 jactionlint = "2.4.0"
-betterleaks = "1.9.0"
+betterleaks = "1.10.1"
 zizmor = "1.31.1"
 # nu-lint publishes Linux builds only, on Codeberg; macOS builds it from crates.io.
 "forgejo:wvhulle/nu-lint" = { version = "1.7.1", api_url = "https://codeberg.org/api/v1", os = [
