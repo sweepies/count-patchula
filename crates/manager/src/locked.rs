@@ -2,7 +2,7 @@
 //! dependencies to update, only versions to check for advisories.
 use crate::*;
 use jsonc_parser::ast::Value;
-use toml_edit::{Document, Item};
+use toml_edit::Item;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Locked {
@@ -84,12 +84,15 @@ impl<'a> Direct<'a> {
 /// crates.io packages in each `Cargo.lock`.
 pub(crate) fn cargo(
     files: &Files,
-    documents: &BTreeMap<&str, Document<&str>>,
+    parsed: &crate::cargo::Parsed<'_>,
     dependencies: &[Dependency],
 ) -> Vec<Locked> {
     let direct = Direct::new(dependencies, Manager::Cargo);
     let mut out = Vec::new();
-    for (path, doc) in documents.iter().filter(|(p, _)| p.ends_with("Cargo.lock")) {
+    for (path, doc) in parsed
+        .documents()
+        .filter(|(p, _)| p.ends_with("Cargo.lock"))
+    {
         let Some(packages) = doc.get("package").and_then(Item::as_array_of_tables) else {
             continue;
         };

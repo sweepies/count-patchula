@@ -30,6 +30,14 @@ pub struct Evaluation {
     /// Releases that were found and eligible, but whose declaration cannot be
     /// rewritten to allow them without guessing.
     pub not_proposed: Vec<NotProposed>,
+    /// What `Evaluator::resolved_current_version` answers for the evaluated
+    /// catalog, when evaluation got that far; `None` leaves the caller to
+    /// ask.
+    pub resolved_current: Option<Option<String>>,
+    /// What `Evaluator::lookup_evidence` answers for the evaluated catalog,
+    /// without catalog evidence, when evaluation scanned every release and
+    /// read every class's policy; `None` leaves the caller to ask.
+    pub lookup_evidence: Option<patchula_report::LookupEvidence>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NotProposed {
@@ -180,23 +188,13 @@ impl Evaluator {
                     .parse(value)
                     .is_ok_and(|v| scheme.order(&v, baseline).is_gt())
             {
-                rejected.push(patchula_report::RejectedVersion {
-                    version: value.into(),
-                    reason: if version.yanked {
-                        "yanked"
-                    } else {
-                        "deprecated"
-                    }
-                    .into(),
-                });
+                rejected.push(rejected_version(version, value));
             }
         }
-        rejected.sort_by(|a, b| a.version.cmp(&b.version).then(a.reason.cmp(&b.reason)));
-        rejected.dedup();
         Ok(patchula_report::LookupEvidence {
             evaluated_at: timestamp(now),
             disabled_updates: self.disabled_updates(dep)?,
-            rejected,
+            rejected: sorted_rejected(rejected),
             catalog: None,
         })
     }
@@ -654,7 +652,7 @@ impl Evaluator {
                         target_eligible_at: Some(timestamp(until)),
                         cooldown: None,
                     }],
-                    not_proposed: Vec::new(),
+                    ..Default::default()
                 });
             }
         }
@@ -859,6 +857,7 @@ impl Evaluator {
                     return Ok(Evaluation {
                         updates: Vec::new(),
                         held_back: summarize(held_back, scheme),
+                        resolved_current: Some(resolved),
                         ..Default::default()
                     });
                 };
@@ -877,10 +876,14 @@ impl Evaluator {
                 return Ok(Evaluation {
                     updates: vec![update],
                     held_back: summarize(held_back, scheme),
+                    resolved_current: Some(resolved),
                     ..Default::default()
                 });
             }
-            return Ok(Evaluation::default());
+            return Ok(Evaluation {
+                resolved_current: Some(resolved),
+                ..Default::default()
+            });
         }
         let baseline = scheme
             .parse(&current)
@@ -889,7 +892,10 @@ impl Evaluator {
         // Branch and opaque refs are preserved. Their digest is proposed through
         // digest_proposal after the engine resolves that same ref.
         if baseline.is_none() && (proposing.unversioned.opaque || scheme == Ecosystem::Docker) {
-            return Ok(Evaluation::default());
+            return Ok(Evaluation {
+                resolved_current: Some(resolved),
+                ..Default::default()
+            });
         }
         let baseline = baseline
             .or_else(|| {
@@ -940,8 +946,22 @@ impl Evaluator {
         // Eligible releases a track's best displaced, kept in case its declaration
         // cannot be rewritten for the best one.
         let mut alternates: Vec<(Parsed, &Version, String, Update, &Effective<'_>)> = Vec::new();
+        // `lookup_evidence`'s rejected releases, gathered in the same pass:
+        // it compares against the declared current version, not `baseline`.
+        let evidence_baseline = scheme
+            .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
+            .ok();
+        let mut rejected = Vec::new();
         for version in &catalog.versions {
             if version.yanked || version.deprecated {
+                if let Some(value) = extracted(extractor.as_ref(), &version.version)
+                    && let Some(baseline) = &evidence_baseline
+                    && scheme
+                        .parse(value)
+                        .is_ok_and(|v| scheme.order(&v, baseline).is_gt())
+                {
+                    rejected.push(rejected_version(version, value));
+                }
                 continue;
             }
             let Some(normalized) = normalize(&version.version) else {
@@ -1270,10 +1290,40 @@ impl Evaluator {
         );
         not_proposed.sort();
         not_proposed.dedup();
+        // The report's lookup evidence, from the releases and class policies
+        // read above. A digest rule that fails leaves it to the report, which
+        // warns about the error as `lookup_evidence` does.
+        let lookup_evidence = self.effective(dep, Update::Digest).ok().map(|digest| {
+            let disabled_updates = Update::ALL
+                .iter()
+                .copied()
+                .filter(|kind| {
+                    let effective = match kind {
+                        Update::Digest => &digest,
+                        _ => {
+                            &policies
+                                .iter()
+                                .find(|(update, _)| update == kind)
+                                .expect("every other class is among the policies")
+                                .1
+                        }
+                    };
+                    !effective.policy.active || (*kind == Update::Digest && !effective.digest)
+                })
+                .collect();
+            patchula_report::LookupEvidence {
+                evaluated_at: timestamp(now),
+                disabled_updates,
+                rejected: sorted_rejected(rejected),
+                catalog: None,
+            }
+        });
         Ok(Evaluation {
             updates: result,
             held_back: summarize(held_back, scheme),
             not_proposed,
+            resolved_current: Some(resolved),
+            lookup_evidence,
         })
     }
     /// Resolve an extracted version to its source identity without applying
@@ -1435,6 +1485,26 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
         }
     }
     groups.into_values().collect()
+}
+/// A yanked or deprecated release `lookup_evidence` reports, as `value`.
+fn rejected_version(version: &Version, value: &str) -> patchula_report::RejectedVersion {
+    patchula_report::RejectedVersion {
+        version: value.into(),
+        reason: if version.yanked {
+            "yanked"
+        } else {
+            "deprecated"
+        }
+        .into(),
+    }
+}
+/// Rejected releases in report order, each once.
+fn sorted_rejected(
+    mut rejected: Vec<patchula_report::RejectedVersion>,
+) -> Vec<patchula_report::RejectedVersion> {
+    rejected.sort_by(|a, b| a.version.cmp(&b.version).then(a.reason.cmp(&b.reason)));
+    rejected.dedup();
+    rejected
 }
 /// The version an `extract` pattern's `version` group captures from `text`,
 /// or `text` itself without a pattern. A text the pattern does not match has
@@ -1657,6 +1727,206 @@ impl Evaluator {
 mod tests {
     use super::*;
     use patchula_words::Manager;
+
+    fn config(text: &str) -> Config {
+        patchula_config::load_files(
+            "/repo/patchula.pkl",
+            std::collections::BTreeMap::from([(
+                "/repo/patchula.pkl".into(),
+                format!("amends \"PatchulaConfig.pkl\"\n{text}"),
+            )]),
+        )
+        .unwrap()
+    }
+
+    /// `(version, yanked, deprecated)` releases, in catalog order.
+    fn catalog(versions: &[(&str, bool, bool)]) -> Catalog {
+        Catalog {
+            versions: versions
+                .iter()
+                .map(|(version, yanked, deprecated)| Version {
+                    version: (*version).into(),
+                    published_at: None,
+                    digest: None,
+                    deprecated: *deprecated,
+                    yanked: *yanked,
+                    prerelease: false,
+                    unchecked: false,
+                })
+                .collect(),
+            dist_tags: Default::default(),
+        }
+    }
+
+    /// What `evaluate_with` carries for the report, checked against the
+    /// standalone reads it replaces; returns whether it carried evidence.
+    fn carries_the_standalone_reads(eval: &Evaluator, dep: &Dependency, catalog: &Catalog) -> bool {
+        let now = DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
+            .unwrap()
+            .into();
+        let evaluation = eval
+            .evaluate_with(dep, catalog, now, &Default::default(), None)
+            .unwrap();
+        assert_eq!(
+            evaluation.resolved_current,
+            Some(eval.resolved_current_version(dep, catalog).unwrap()),
+            "{dep:?}"
+        );
+        let standalone = eval.lookup_evidence(dep, Some(catalog), now);
+        match evaluation.lookup_evidence {
+            Some(evidence) => {
+                assert_eq!(Ok(evidence), standalone, "{dep:?}");
+                true
+            }
+            None => {
+                assert!(standalone.is_err(), "{dep:?}: {standalone:?}");
+                false
+            }
+        }
+    }
+
+    /// Evaluation gathers the report's resolved current version and lookup
+    /// evidence in its own pass, exactly as the standalone reads give them:
+    /// rejected releases above the declared current version (through an
+    /// `extract` pattern, deduplicated), and every class's disabled state.
+    /// A digest-only rule that fails leaves the evidence to the report.
+    #[test]
+    fn evaluation_carries_the_report_reads_it_replaces() {
+        let releases = catalog(&[
+            ("0.9.0", true, false),
+            ("1.0.0", false, false),
+            ("1.1.0", false, true),
+            ("1.2.0", true, true),
+            ("1.2.0", true, false),
+            ("1.3.0", false, false),
+            ("2.0.0", true, false),
+            ("2.1.0", false, false),
+        ]);
+        let npm = |current: &str, resolved: Option<&str>| Dependency {
+            current: current.into(),
+            resolved: resolved.map(Into::into),
+            ..patchula_manager::testing::dependency(
+                Manager::Npm,
+                DependencyKind::Production,
+                Source::Npm,
+            )
+        };
+        let plain = Evaluator::new(&config(""), Default::default()).unwrap();
+        let no_major = Evaluator::new(
+            &config(
+                "rules { new Rule { select = new Selector { updates = new Listing { \"major\" } }; apply = new Overrides { active = false } } }\n",
+            ),
+            Default::default(),
+        )
+        .unwrap();
+        for eval in [&plain, &no_major] {
+            for dep in [
+                npm("1.0.0", Some("1.0.0")),
+                npm("1.0.0", None),
+                npm("^1.0.0", Some("1.1.0")),
+                npm("^1.0.0", None),
+            ] {
+                assert!(carries_the_standalone_reads(eval, &dep, &releases));
+            }
+        }
+        let rejected = |eval: &Evaluator, dep: &Dependency, catalog: &Catalog| {
+            eval.evaluate_with(dep, catalog, Utc::now(), &Default::default(), None)
+                .unwrap()
+                .lookup_evidence
+                .unwrap()
+                .rejected
+                .into_iter()
+                .map(|r| (r.version, r.reason))
+                .collect::<Vec<_>>()
+        };
+        let dep = npm("1.0.0", Some("1.0.0"));
+        assert_eq!(
+            rejected(&plain, &dep, &releases),
+            [
+                ("1.1.0".to_owned(), "deprecated".to_owned()),
+                ("1.2.0".into(), "yanked".into()),
+                ("2.0.0".into(), "yanked".into()),
+            ]
+        );
+        // A range with no resolved version has no evidence baseline, though
+        // evaluation proposes from the range's floor.
+        assert!(rejected(&plain, &npm("^1.0.0", None), &releases).is_empty());
+        let disabled = |eval: &Evaluator| {
+            eval.evaluate_with(&dep, &releases, Utc::now(), &Default::default(), None)
+                .unwrap()
+                .lookup_evidence
+                .unwrap()
+                .disabled_updates
+        };
+        assert_eq!(
+            disabled(&no_major),
+            plain_with(&disabled(&plain), Update::Major)
+        );
+
+        // Tags read through an `extract` pattern; one it does not match is
+        // never rejected.
+        let tagged = catalog(&[
+            ("v1.0.0", false, false),
+            ("v1.1.0", true, false),
+            ("release-1.2.0", true, false),
+            ("v1.3.0", false, false),
+        ]);
+        let dep = Dependency {
+            current: "v1.0.0".into(),
+            resolved: Some("1.0.0".into()),
+            extract: Some("^v(?<version>.+)$".into()),
+            ..patchula_manager::testing::dependency(
+                Manager::Regex,
+                DependencyKind::Production,
+                Source::GithubReleases,
+            )
+        };
+        assert!(carries_the_standalone_reads(&plain, &dep, &tagged));
+        assert_eq!(
+            rejected(&plain, &dep, &tagged),
+            [("1.1.0".to_owned(), "yanked".to_owned())]
+        );
+
+        // A digest-only rule the image's versions cannot evaluate fails no
+        // proposal; the report reads the evidence and warns.
+        let image = Dependency {
+            current: "1.0".into(),
+            resolved: None,
+            scheme: patchula_words::Scheme::Docker,
+            ..patchula_manager::testing::dependency(
+                Manager::Dockerfile,
+                DependencyKind::ContainerImage,
+                Source::Docker,
+            )
+        };
+        let images = catalog(&[
+            ("1.0", false, false),
+            ("1.1", true, false),
+            ("1.2", false, false),
+        ]);
+        let broken_digest = Evaluator::new(
+            &config(
+                "rules { new Rule { select = new Selector { updates = new Listing { \"digest\" }; current = \"semver:^1\" }; apply = new Overrides { digest = false } } }\n",
+            ),
+            Default::default(),
+        )
+        .unwrap();
+        assert!(carries_the_standalone_reads(&plain, &image, &images));
+        assert!(!carries_the_standalone_reads(
+            &broken_digest,
+            &image,
+            &images
+        ));
+    }
+
+    /// `disabled` with `kind` added, in `Update::ALL` order.
+    fn plain_with(disabled: &[Update], kind: Update) -> Vec<Update> {
+        Update::ALL
+            .iter()
+            .copied()
+            .filter(|update| *update == kind || disabled.contains(update))
+            .collect()
+    }
 
     /// A step action gets no new SHA pin when its workflow is one
     /// `actions.lock` lists: the owner's `gh actions-lock` would unpin it.

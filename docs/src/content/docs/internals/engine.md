@@ -47,9 +47,13 @@ evaluation or scanning. The path inventory and unsupported-file list always
 come from the current tree. Warm scans revalidate the repository
 metadata and the hinted branch in parallel, and always check the current
 default branch. Catalog, digest and ref requests are deduplicated across the
-batch. Persisted lookup hints let warm source reads — current refs and the
-mutable tags the last run resolved — overlap revalidation, but hints only
-schedule work: the validated extraction and policy decide the report.
+batch. Persisted lookup hints let warm source reads — current refs, the
+mutable tags of GitHub tag catalogs the next run may reuse, and the image
+tags the last run resolved — overlap revalidation, so the first warm run
+after a cold one already prefetches them. Hints only schedule work: the
+validated extraction and policy decide the report, a manual retry reads a
+hinted answer again, and a prefetched image digest the run no longer wants
+is dropped.
 A run that will write reads its control and write inventory beside the
 head check as well: that read anchors its per-page checks on its own
 first page and is kept only when its default branch, head commit and

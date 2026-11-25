@@ -14,6 +14,19 @@ pub(crate) struct Parsed<'a> {
     pub configs: BTreeMap<&'a str, Result<toml_edit::DocumentMut, ()>>,
 }
 
+impl<'a> Parsed<'a> {
+    /// The manifest or lockfile at `path`, when it parsed.
+    fn document(&self, path: &str) -> Option<&Document<&'a str>> {
+        self.manifests.get(path)?.as_ref().ok()
+    }
+    /// Every manifest and lockfile that parsed, by path.
+    pub(crate) fn documents(&self) -> impl Iterator<Item = (&'a str, &Document<&'a str>)> {
+        self.manifests
+            .iter()
+            .filter_map(|(path, doc)| Some((*path, doc.as_ref().ok()?)))
+    }
+}
+
 /// Parse the selected manifests and every configuration file once.
 pub(crate) fn parsed<'a>(files: &'a Files, keep: impl Fn(&str) -> bool) -> Parsed<'a> {
     Parsed {
@@ -48,13 +61,13 @@ pub(crate) fn parsed<'a>(files: &'a Files, keep: impl Fn(&str) -> bool) -> Parse
 pub(super) fn extract(
     path: &str,
     text: &Lines<'_>,
-    files: &BTreeMap<&str, Document<&str>>,
+    files: &Parsed<'_>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
     if roles::leaf(path) != "Cargo.toml" {
         return Ok(Vec::new());
     }
-    let Some(doc) = files.get(path) else {
+    let Some(doc) = files.document(path) else {
         return Ok(Vec::new());
     };
     let base = path.strip_suffix("Cargo.toml").expect("manifest suffix");
@@ -62,7 +75,7 @@ pub(super) fn extract(
     // The nearest ancestor workspace supplies inherited declarations. Their
     // editable version location belongs to the workspace root, scanned once.
     if let Some(deps) = files
-        .iter()
+        .documents()
         .filter(|(p, _)| {
             roles::leaf(p) == "Cargo.toml"
                 && base.starts_with(p.strip_suffix("Cargo.toml").unwrap_or(p))
@@ -76,7 +89,7 @@ pub(super) fn extract(
         .max_by_key(|(length, _)| *length)
         .map(|(_, deps)| deps)
     {
-        workspace.extend(deps.iter().map(|(k, v)| (k.to_owned(), v.clone())));
+        workspace.extend(deps.iter());
     }
     let mut out = Vec::new();
     walk(
@@ -91,7 +104,7 @@ pub(super) fn extract(
     // A lockfile resolves direct manifest declarations only; never emit its
     // transitive packages as independent dependencies.
     let lock = files
-        .iter()
+        .documents()
         .filter(|(p, _)| {
             p.ends_with("Cargo.lock") && base.starts_with(p.strip_suffix("Cargo.lock").unwrap())
         })
@@ -130,7 +143,7 @@ pub(super) fn extract(
 /// manifest's declarations: its own package, and for a workspace root also
 /// every member. A path dependency that is not a member is not one of them.
 fn declaring_packages<'a>(
-    files: &'a BTreeMap<&str, Document<&str>>,
+    files: &'a Parsed<'_>,
     doc: &'a Document<&str>,
     base: &str,
 ) -> BTreeSet<&'a str> {
@@ -167,7 +180,7 @@ fn declaring_packages<'a>(
             .collect()
     };
     let (members, excluded) = (compile("members"), compile("exclude"));
-    for (path, member) in files {
+    for (path, member) in files.documents() {
         let Some(directory) = path
             .strip_prefix(base)
             .and_then(|rest| rest.strip_suffix("/Cargo.toml"))
@@ -243,7 +256,7 @@ fn walk(
     text: &Lines<'_>,
     table: &dyn toml_edit::TableLike,
     pointer: &str,
-    workspace: &BTreeMap<String, Item>,
+    workspace: &BTreeMap<&str, &Item>,
     out: &mut Vec<Dependency>,
     skipped: &mut Vec<Skipped>,
 ) {
@@ -265,7 +278,7 @@ fn walk(
                 };
                 let declared = value;
                 let value = if inherited {
-                    workspace.get(name).unwrap_or(value)
+                    workspace.get(name).copied().unwrap_or(value)
                 } else {
                     value
                 };
@@ -723,12 +736,6 @@ pub(crate) const CRATES: crate::origins::Public = crate::origins::Public {
     hosts: &["index.crates.io", "crates.io"],
 };
 
-/// The parsed manifests, lock docs and configs extraction shares.
-struct State<'a> {
-    parsed: Parsed<'a>,
-    docs: BTreeMap<&'a str, Document<&'a str>>,
-}
-
 pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 
 pub(crate) struct Descriptor;
@@ -791,14 +798,12 @@ impl crate::Ecosystem for Descriptor {
         // only for its patches, above a selected crate, does not shape
         // extraction.
         let parsed = parsed(files, |path| scanner.selected(Manager::Cargo, path));
-        // The manifests extraction reads; one the Count cannot parse fails
-        // the whole extraction, as before.
-        let docs: BTreeMap<&str, Document<&str>> = parsed
-            .manifests
-            .iter()
-            .map(|(p, r)| r.clone().map(|d| (*p, d)))
-            .collect::<Result<_, _>>()?;
-        let state = std::rc::Rc::new(State { parsed, docs });
+        // A manifest the Count cannot parse fails the whole extraction, so
+        // every one extraction reads below parsed.
+        if let Some(error) = parsed.manifests.values().find_map(|r| r.as_ref().err()) {
+            return Err(error.clone());
+        }
+        let state = std::rc::Rc::new(parsed);
         let extract_state = state.clone();
         Ok(Prepared {
             extract: Some(Box::new(move |path, text, out| {
@@ -807,14 +812,14 @@ impl crate::Ecosystem for Descriptor {
                 {
                     toolchains::rust(path, text)
                 } else {
-                    extract(path, text, &extract_state.docs, &mut out.skipped).map(|mut deps| {
+                    extract(path, text, &extract_state, &mut out.skipped).map(|mut deps| {
                         // A committed cooldown the Count cannot read fails
                         // the manifest's crates.io lookups the way a
                         // replacement it cannot read does.
-                        let held = cooldown(&extract_state.parsed, path);
+                        let held = cooldown(&extract_state, path);
                         let unusable = match &held {
                             Some(Err(reason)) => Some(reason.clone()),
-                            _ => replaced(files, &extract_state.parsed, path),
+                            _ => replaced(files, &extract_state, path),
                         };
                         for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
                             if let Some(reason) = &unusable {
@@ -832,7 +837,7 @@ impl crate::Ecosystem for Descriptor {
             })),
             finish: Some(Box::new(move |out| {
                 out.locked
-                    .extend(locked::cargo(files, &state.docs, &out.dependencies));
+                    .extend(locked::cargo(files, &state, &out.dependencies));
                 let mut memo = BTreeMap::new();
                 for locked in out
                     .locked
@@ -841,8 +846,8 @@ impl crate::Ecosystem for Descriptor {
                 {
                     let (replaced, held) = memo.entry(locked.file.clone()).or_insert_with(|| {
                         (
-                            replaced(files, &state.parsed, &locked.file),
-                            cooldown(&state.parsed, &locked.file),
+                            replaced(files, &state, &locked.file),
+                            cooldown(&state, &locked.file),
                         )
                     });
                     if let Some(reason) = match held {
@@ -859,12 +864,12 @@ impl crate::Ecosystem for Descriptor {
                 // lockfile run's Cargo environment: every manifest and
                 // lockfile directory reports the strictest value its
                 // applying configurations set, or the reason it is unread.
-                for path in state.parsed.manifests.keys() {
+                for path in state.manifests.keys() {
                     let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
                     if out.cargo_cooldowns.contains_key(dir) {
                         continue;
                     }
-                    if let Some(held) = cooldown(&state.parsed, path) {
+                    if let Some(held) = cooldown(&state, path) {
                         out.cargo_cooldowns.insert(
                             dir.to_owned(),
                             match held {
