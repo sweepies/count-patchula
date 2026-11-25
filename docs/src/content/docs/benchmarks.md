@@ -46,7 +46,8 @@ outside the standard catalogs and dependency blocks.
 ## Notes
 
 - Count Patchula ran on 2026-11-25 (`955ff81a`, medians across 3 cold/warm runs
-  per repository, 5 cold runs for `mastodon/mastodon`). Renovate 44.261.0 ran on
+  per repository, 5 cold runs for `mastodon/mastodon`; speedups and ratios are
+  computed from unrounded medians and MiB values). Renovate 44.261.0 ran on
   2026-11-24 on the same VM in Docker with each repository's own config,
   `dryRun=lookup`, `repositoryCache=enabled` and `persistRepoData=true` so warm
   runs kept both the clone and cache.

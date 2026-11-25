@@ -63,9 +63,9 @@ method, coverage and notes.
 - **Careful defaults** — Exact pins or locked ranges, digest-pinned actions and
   container images, a 24-hour release-age wait, verified GitHub-signed commits,
   and auto-merge off by default (beyond reference data such as CA bundles).
-- **Security fixes first** — Every dependency with an exact version is checked
-  against [OSV.dev](https://osv.dev); fixes skip release-age waits, schedule
-  windows and PR limits.
+- **Security fixes first** — Exact-version dependencies in covered ecosystems
+  are checked against [OSV.dev](https://osv.dev); fixes skip release-age waits,
+  schedule windows and PR limits.
 - **Dashboard & batching** — A [dependency
   dashboard](https://count-patchula.sweepy.dev/guide/dashboard/), schedule
   windows, PR limits, grouping, auto-merge behind check gates, and a
@@ -74,7 +74,7 @@ method, coverage and notes.
   versions you reviewed.
 - **MIT-licensed GitHub App server** — Webhooks, scheduled sweeps, a priority
   queue, multiple installations, warm shared caches and a JSON reporting API in
-  the same binary—no paid enterprise tier required.
+  the same binary — no paid enterprise tier required.
 - **Local CLI & TUI** — Browse and selectively apply updates in a checkout with
   `patchula tui`, automate them with `patchula apply`, or trigger server runs
   from your terminal with `patchula remote run`.
