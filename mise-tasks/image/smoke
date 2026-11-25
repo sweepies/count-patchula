@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-#MISE description="Smoke-test the server image image:build loaded: user, annotations, tools, the server and its volume, and lockfile tools from mise"
+#MISE description="Smoke-test the server image image:build loaded: user, annotations, tools, a first start that installs mise, the server and its volume, and lockfile tools from mise"
 #USAGE flag "--arch <arch>" default="amd64" help="Which patchula:smoke-<arch> image to run; arm64 runs under QEMU, so it only gets the quick checks" {
 #USAGE   choices "amd64" "arm64"
 #USAGE }
@@ -28,9 +28,8 @@ def main [--arch: string = "amd64"] {
   let patchula = ^docker run --rm --platform $platform $image --version | complete
   check $"patchula --version is ($version)" ($patchula.exit_code == 0 and ($patchula.stdout | str trim) == $"patchula ($version)")
   check "git --version" ((run-in $image $platform git --version).exit_code == 0)
-  let mise_expected = open crates/tools/src/lockfiles/defaults.toml | get tools.mise
-  let mise_version = run-in $image $platform mise --version
-  check $"mise --version is ($mise_expected)" ($mise_version.exit_code == 0 and ($mise_version.stdout | str starts-with $"($mise_expected) "))
+  check "packslip version" ((run-in $image $platform packslip version).exit_code == 0)
+  check "no mise in the image" ((run-in $image $platform sh -c "command -v mise").exit_code != 0)
   if $arch != "amd64" { return }
 
   let config = ^docker image inspect --format '{{json .Config}}' $image | from json
@@ -54,6 +53,19 @@ def main [--arch: string = "amd64"] {
     ^chmod -R a+rX $work
     let credentials = [--env PATCHULA_APP_ID=12345 --env $"PATCHULA_APP_PRIVATE_KEY=(open --raw $'($work)/app.pem')" --env $"PATCHULA_WEBHOOK_SECRET=(random chars -l 32)"]
 
+    # The first start, against the real GitHub: the server installs mise into
+    # the new volume with packslip, then stops, because GitHub does not know
+    # the throwaway App. A token keeps packslip within GitHub's API limits on
+    # a shared runner.
+    let started = date now
+    let first = ^docker run --rm --env GITHUB_TOKEN --volume $"($volume):/var/lib/patchula" ...$credentials $image | complete
+    let installed = $first.stderr | lines | where $it =~ "lockfile tools run with this mise"
+    if ($installed | is-empty) { print ($first.stderr | lines | last 10 | str join "\n") }
+    check $"first start installs mise with packslip in (since $started)" ($first.exit_code != 0 and ($installed | length) == 1)
+    let mise = $installed | first | from json | get fields.mise
+    let mise_version = ^docker run --rm --volume $"($volume):/var/lib/patchula" --entrypoint $mise $image --version | complete
+    check $"($mise) runs \(($mise_version.stdout | str trim)\)" ($mise_version.exit_code == 0)
+
     # The server asks GitHub who its App is before it listens, and the API's
     # address is fixed, so a throwaway App needs a stand-in GitHub: openssl
     # serves one answer for api.github.com under a CA only this container
@@ -68,15 +80,13 @@ def main [--arch: string = "amd64"] {
       sleep 1sec
     }
     check $"/healthz answers 200 after (since $started)" ($status == 200)
-    let logs = ^docker logs $name | complete
-    let started_mise = $logs.stderr | lines | where $it =~ "lockfile tools run with this mise"
-    check "server uses the image's mise" ($logs.exit_code == 0 and ($started_mise | length) == 1 and (($started_mise | first | from json | get fields.mise) in ["/usr/bin/mise", "/bin/mise"]))
+    check "the second start reuses the volume's mise" ((^docker logs $name | complete | get stderr | lines | where $it =~ "lockfile tools run with this mise" | length) == 1)
     check "cache.sqlite in the volume" ((^docker exec $name test -f /var/lib/patchula/cache.sqlite | complete).exit_code == 0)
     check "the documented health check command" ((^docker exec $name curl --fail --silent --show-error --output /dev/null http://127.0.0.1:8080/healthz | complete).exit_code == 0)
 
     # Tools go into the server's volume as user 10001, as the runner installs them.
     let started = date now
-    let node = ^docker run --rm --volume $"($volume):/var/lib/patchula" --env MISE_DATA_DIR=/var/lib/patchula/tools --env MISE_YES=1 --entrypoint mise $image exec node@24 -- node --version | complete
+    let node = ^docker run --rm --volume $"($volume):/var/lib/patchula" --env MISE_DATA_DIR=/var/lib/patchula/tools --env MISE_YES=1 --entrypoint $mise $image exec node@24 -- node --version | complete
     if $node.exit_code != 0 { print ($node.stderr | lines | last 10 | str join "\n") }
     check $"mise installs and runs node as 10001 \(($node.stdout | str trim)\) in (since $started)" ($node.exit_code == 0)
 

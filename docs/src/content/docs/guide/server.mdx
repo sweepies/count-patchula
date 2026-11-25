@@ -369,11 +369,11 @@ version and upgrade on purpose.
 
 The image is built with [apko](https://github.com/chainguard-dev/apko) from
 [Wolfi](https://wolfi.dev) packages. It holds `patchula`, `git`, `curl` and
-the pinned [mise](https://mise.jdx.dev), on Wolfi's glibc, and starts
-`patchula serve` as user and group 10001. Lockfile tools are not in the image:
-mise installs each one into the volume the first time a repository needs it (see
-[what the runner needs](/installation/#what-the-runner-needs)). The image sets
-no `HEALTHCHECK` or `EXPOSE`; configure the [health check](#health-check) and
+[packslip](https://packslip.dev), on Wolfi's glibc, and starts `patchula serve`
+as user and group 10001. Lockfile tools are not in the image: mise installs
+each one into the volume the first time a repository needs it (see [what the
+runner needs](/installation/#what-the-runner-needs)). The image sets no
+`HEALTHCHECK` or `EXPOSE`; configure the [health check](#health-check) and
 publish 8080 yourself.
 
 Each build takes Wolfi's current packages, so a release picks up Wolfi's
@@ -474,9 +474,9 @@ startupProbe:
 
 ### mise on first start
 
-When there is no `mise` on `PATH` (for example on a bare host without `mise`),
-`patchula serve` makes sure the tool store has the mise version the Count pins
-before it signs in to GitHub. If it is missing, it runs packslip:
+When there is no `mise` on `PATH`, as in the image, `patchula serve` makes sure
+the tool store has the mise version the Count pins before it signs in to
+GitHub. If it is missing, it runs packslip:
 
 ```sh
 packslip install github.com/jdx/mise --version <pinned> --pin ps1_nlhmwtfeufglxv5myvwvronk7a
@@ -498,17 +498,17 @@ runs out of GitHub's anonymous API limit.
 
 ### Offline hosts
 
-The image already includes `mise`, and a host that cannot reach the internet
-needs a volume prewarmed with the pinned lockfile tools. Fill one on a connected
-machine, with the same image version, and copy it over:
+A host that cannot reach GitHub needs a volume that already holds mise. Fill
+one on a connected machine, with the same image version, and copy it over:
 
 ```sh
 docker run --rm --volume patchula:/var/lib/patchula \
   --entrypoint patchula ghcr.io/sweepies/count-patchula:X.Y.Z tools install
 ```
 
-`patchula tools install` prewarms every pinned lockfile tool into the store, so
-the offline host needs no downloads for the default tool versions.
+`patchula tools install` installs mise the same way, then prewarms every
+pinned lockfile tool into the store, so the offline host needs no downloads
+for the default tool versions either.
 
 ## Hosting on Railway
 
