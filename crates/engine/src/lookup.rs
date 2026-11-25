@@ -38,12 +38,27 @@ impl Discovery {
     }
 }
 
+/// Digests read for each key: a git ref's commit or an image tag's digest.
+pub(super) type Digests = BTreeMap<DigestKey, std::result::Result<String, Failure>>;
+
 /// What the scan stage produced.
 pub(super) struct Scanned {
     pub work: Vec<Work>,
     pub extraction: u64,
     pub prefetch: u64,
-    pub digests: BTreeMap<DigestKey, std::result::Result<String, Failure>>,
+    /// Hinted ref and mutable tag digests, prefetched beside the scan.
+    pub digests: Digests,
+    /// Hinted image tag digests, prefetched beside the scan.
+    pub image_digests: Digests,
+}
+
+/// The digest keys a run's resolution wanted, for the next run's prefetch
+/// hint.
+pub(super) struct Wanted {
+    /// Mutable GitHub tags, resolved through the batched tag read.
+    tags: BTreeSet<DigestKey>,
+    /// Image tags, resolved through the registry.
+    images: BTreeSet<DigestKey>,
 }
 
 /// What the post-scan stages produced: the finished work, the lookups they
@@ -217,6 +232,7 @@ impl Engine {
                     .digests
                     .extend(stored.digests.iter().cloned());
                 discovery.hint.tags.extend(stored.tags.iter().cloned());
+                discovery.hint.images.extend(stored.images.iter().cloned());
                 discovery.known.insert(repo.clone(), stored);
             }
         }
@@ -224,13 +240,14 @@ impl Engine {
     }
 
     /// The hinted digest reads a scan overlaps: the refs the last runs
-    /// recorded, and the mutable tags they tracked. A quiet sweep's lookup
-    /// prefetches exactly these before its stages.
+    /// recorded, the mutable tags they tracked, and the image tags they
+    /// resolved, as ref and image digests. A quiet sweep's lookup prefetches
+    /// exactly these before its stages.
     pub(super) async fn prefetch_digests(
         &self,
         discovery: &Discovery,
         sent: &Mutex<BTreeSet<Sent>>,
-    ) -> BTreeMap<DigestKey, std::result::Result<String, Failure>> {
+    ) -> (Digests, Digests) {
         let hint_digests = discovery.hint.digests.clone();
         // A pinned tag is also a hinted ref; the tracked ref read answers it.
         let hint_tags: BTreeSet<DigestKey> = discovery
@@ -239,7 +256,13 @@ impl Engine {
             .difference(&hint_digests)
             .cloned()
             .collect();
-        let (digests, tags) = tokio::join!(
+        let hint_images = discovery
+            .hint
+            .images
+            .iter()
+            .map(|key| (key.clone(), false))
+            .collect();
+        let (digests, tags, images) = tokio::join!(
             self.digests(
                 hint_digests.into_iter().map(|key| (key, false)).collect(),
                 &self.sources,
@@ -247,10 +270,11 @@ impl Engine {
                 sent,
             ),
             self.sources.fresh_tag_digests(&hint_tags),
+            self.image_digests(hint_images, &self.sources, false, sent),
         );
         let mut digests = digests;
         digests.extend(tags);
-        digests
+        (digests, images)
     }
 
     /// Stage: scan — read every repository's config and files; hinted digests
@@ -446,12 +470,14 @@ impl Engine {
                 micros(started),
             )
         };
-        let ((work, extraction), (digests, prefetch)) = tokio::join!(scans, prefetch);
+        let ((work, extraction), ((digests, image_digests), prefetch)) =
+            tokio::join!(scans, prefetch);
         Ok(Scanned {
             work: work?,
             extraction,
             prefetch,
             digests,
+            image_digests,
         })
     }
 
@@ -469,6 +495,7 @@ impl Engine {
         work.sort_by(|a, b| a.report.repository.cmp(&b.report.repository));
         let mut lookups = Lookups {
             digests: scanned.digests,
+            image_digests: scanned.image_digests,
             ..Default::default()
         };
         let phase = PhaseTrace::new("lookup");
@@ -491,14 +518,16 @@ impl Engine {
             drop(phase);
             let started = Instant::now();
             let phase = PhaseTrace::new("digest");
-            let hinted_tags = self.resolve_digests(eval_keys, &mut lookups, sent).await?;
+            let wanted = self
+                .resolve_digests(eval_keys, &mut lookups, &plan.waits, sent)
+                .await?;
             let digest = micros(started);
             drop(phase);
-            Ok::<_, Error>((lookup, proposal_cpu_time, hinted_tags, digest))
+            Ok::<_, Error>((lookup, proposal_cpu_time, wanted, digest))
         };
-        let ((lookup, proposal_cpu_time, hinted_tags, digest), current_sboms) =
+        let ((lookup, proposal_cpu_time, wanted, digest), current_sboms) =
             tokio::try_join!(stages, async { Ok::<_, Error>(current_sboms.await) })?;
-        self.save_lookup_hints(&plan, &hinted_tags).await?;
+        self.save_lookup_hints(&plan, &wanted).await?;
         let started = Instant::now();
         let phase = PhaseTrace::new("image");
         self.read_images(&work, &mut lookups, (current_reads, current_sboms), sent)
@@ -717,6 +746,7 @@ impl Engine {
                         catalogs,
                         digests,
                         tags: BTreeSet::new(),
+                        images: BTreeSet::new(),
                     },
                     packages,
                     discovery.known.get(&repo.report.repository).cloned(),
@@ -726,22 +756,21 @@ impl Engine {
         Ok(plan)
     }
 
-    /// Write the hints `plan_lookups` computed, with the mutable tag keys
-    /// `resolve_digests` returned. Hints are replaced after a successful
-    /// run's resolution, so a hint that outlives its run names only what a
-    /// later run still wants.
-    pub(super) async fn save_lookup_hints(
-        &self,
-        plan: &Plan,
-        tags: &BTreeSet<DigestKey>,
-    ) -> Result<()> {
-        for (scope, hint, packages, known) in &plan.hints {
-            let mut hint = hint.clone();
-            hint.tags = tags
-                .iter()
+    /// Write the hints `plan_lookups` computed, with the mutable tag and
+    /// image keys `resolve_digests` returned. Hints are replaced after a
+    /// successful run's resolution, so a hint that outlives its run names
+    /// only what a later run still wants.
+    pub(super) async fn save_lookup_hints(&self, plan: &Plan, wanted: &Wanted) -> Result<()> {
+        let own = |keys: &BTreeSet<DigestKey>, packages: &BTreeSet<String>| -> BTreeSet<_> {
+            keys.iter()
                 .filter(|(package, _)| packages.contains(package))
                 .cloned()
-                .collect();
+                .collect()
+        };
+        for (scope, hint, packages, known) in &plan.hints {
+            let mut hint = hint.clone();
+            hint.tags = own(&wanted.tags, packages);
+            hint.images = own(&wanted.images, packages);
             // An unchanged hint is not rewritten: each write is a writer
             // round trip and flushes the access-touch set.
             if known.as_ref() != Some(&hint) {
@@ -1098,14 +1127,15 @@ impl Engine {
     }
 
     /// Stage: resolve — catalog-carried digests, mutable-tag GraphQL, ref
-    /// digests, and image tag digests. Returns the mutable tag keys this
-    /// run wanted, for the next run's prefetch hint.
+    /// digests, and image tag digests. Returns the mutable tag and image
+    /// keys this run wanted, for the next run's prefetch hint.
     pub(super) async fn resolve_digests(
         &self,
         mut keys: EvalKeys,
         lookups: &mut Lookups,
+        waits: &BTreeMap<LookupKey, u32>,
         sent: &Mutex<BTreeSet<Sent>>,
-    ) -> Result<BTreeSet<DigestKey>> {
+    ) -> Result<Wanted> {
         // The revalidated complete tag namespace already carries peeled target
         // commits, which answer both current and proposed action tags without
         // a /commits/{tag} request per tag.
@@ -1145,16 +1175,35 @@ impl Engine {
                 carried.insert((package.clone(), reference.clone()));
             }
         }
-        // Every key the reused-catalog rule sends to the batched tag read is
-        // next run's prefetch hint, whether a prefetch answered it this run
-        // or the read below did: hinting only sent keys would drop the very
-        // keys the prefetch just resolved.
+        // Every ref of a package whose GitHub tag catalog the next run may
+        // reuse is that run's prefetch hint, whether a prefetch answered it
+        // this run, the read below did, or a catalog fetched this run carried
+        // it: a run that reuses the catalog sends exactly these to the
+        // batched tag read, so hinting only sent keys would leave the first
+        // warm run to read them in this stage. A catalog no wait lets the
+        // next run reuse is fetched again and carries its tags, and a forge
+        // ref resolves only through its tag catalog: neither is hinted.
+        let github_tags = |package: &str| {
+            catalogs(package).any(|(key, _)| {
+                key.1.source == Source::GithubTags
+                    && super::catalogs::reuse_hours(waits.get(key).copied().unwrap_or(0)).is_some()
+            }) && !catalogs(package).any(|(key, _)| key.1.source == Source::ForgeTags)
+        };
         let hinted_tags: BTreeSet<DigestKey> = keys
             .digests
             .keys()
-            .filter(|(package, _)| reused_tags(package))
+            .filter(|(package, _)| github_tags(package))
             .cloned()
             .collect();
+        // Every image key is next run's prefetch hint. A prefetched answer
+        // stands unless a manual retry revalidates it; one this run no longer
+        // wants is dropped, so the stage answers exactly the keys asked.
+        let hinted_images: BTreeSet<DigestKey> = keys.images.keys().cloned().collect();
+        lookups
+            .image_digests
+            .retain(|key, _| hinted_images.contains(key));
+        keys.images
+            .retain(|key, revalidate| *revalidate || !lookups.image_digests.contains_key(key));
         // A ref under a manual retry is read again when only a prior run's
         // hint holds it; one a catalog fetched this run carries is fresh.
         keys.digests.retain(|key, revalidate| {
@@ -1196,24 +1245,15 @@ impl Engine {
         };
         let fresh_sources = &self.sources.revalidating();
         let refs = self.digests(digest_keys, fresh_sources, true, sent);
-        let images = self.read_each(
-            keys.images,
-            fresh_sources,
-            DIGEST_FAN_OUT,
-            true,
-            sent,
-            |sources, (package, tag)| {
-                (Sent::Image(package.clone()), async move {
-                    let result = sources.registry_digest(&package, &tag).await;
-                    ((package, tag), result.map_err(Failure::from))
-                })
-            },
-        );
+        let images = self.image_digests(keys.images, fresh_sources, true, sent);
         let (tags, refs, image_digests) = futures_util::future::join3(tags, refs, images).await;
         lookups.digests.extend(tags);
         lookups.digests.extend(refs);
-        lookups.image_digests = image_digests;
-        Ok(hinted_tags)
+        lookups.image_digests.extend(image_digests);
+        Ok(Wanted {
+            tags: hinted_tags,
+            images: hinted_images,
+        })
     }
 
     /// The SBOM of each `(package, digest, platform)` in `reads`, the
@@ -1484,6 +1524,31 @@ impl Engine {
                 (Sent::Git(package.clone()), async move {
                     let result = sources.digest(&package, &reference).await;
                     ((package, reference), result.map_err(Failure::from))
+                })
+            },
+        )
+        .await
+    }
+
+    /// The registry digest of each image `(package, tag)` in `keys`, the
+    /// flagged ones read through `fresh`.
+    async fn image_digests(
+        &self,
+        keys: BTreeMap<DigestKey, bool>,
+        fresh: &Sources,
+        counted: bool,
+        sent: &Mutex<BTreeSet<Sent>>,
+    ) -> Digests {
+        self.read_each(
+            keys,
+            fresh,
+            DIGEST_FAN_OUT,
+            counted,
+            sent,
+            |sources, (package, tag)| {
+                (Sent::Image(package.clone()), async move {
+                    let result = sources.registry_digest(&package, &tag).await;
+                    ((package, tag), result.map_err(Failure::from))
                 })
             },
         )

@@ -368,13 +368,18 @@ impl Engine {
                 dep.name
             ));
         }
-        let resolved = catalog.and_then(|c| {
-            eval.and_then(|eval| {
-                eval.resolved_current_version(&dep.dependency, c)
-                    .ok()
-                    .flatten()
-            })
-        });
+        // Evaluation already resolved the current version against this
+        // catalog when it got that far; otherwise it is asked here.
+        let resolved = match dep.evaluation.resolved_current.take() {
+            Some(resolved) => resolved,
+            None => catalog.and_then(|c| {
+                eval.and_then(|eval| {
+                    eval.resolved_current_version(&dep.dependency, c)
+                        .ok()
+                        .flatten()
+                })
+            }),
+        };
         let resolution = resolved.as_ref().or(dep.resolved.as_ref()).map(|version| {
             let kind = if dep.proposing().pin.commit {
                 if dep.digest.is_some() {
@@ -401,6 +406,9 @@ impl Engine {
                 version: version.clone(),
             }
         });
+        // Evaluation gathers the lookup evidence in its own pass over the
+        // catalog when it can; otherwise it is read below.
+        let evaluated_evidence = dep.evaluation.lookup_evidence.take();
         let proposals_refs: BTreeSet<_> = proposals
             .iter()
             .filter_map(|p| p.new_value.clone())
@@ -447,7 +455,11 @@ impl Engine {
                 held_back,
                 stale,
                 lookup: eval.and_then(|eval| {
-                    match eval.lookup_evidence(&dep.dependency, catalog, now) {
+                    let evidence = match evaluated_evidence {
+                        Some(evidence) => Ok(evidence),
+                        None => eval.lookup_evidence(&dep.dependency, catalog, now),
+                    };
+                    match evidence {
                         Ok(mut evidence) => {
                             evidence.catalog = dep
                                 .needs

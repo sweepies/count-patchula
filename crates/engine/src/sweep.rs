@@ -222,11 +222,13 @@ impl Engine {
             return Ok(BTreeSet::new());
         }
         let sent = std::sync::Mutex::new(BTreeSet::<Sent>::new());
+        let (digests, image_digests) = self.prefetch_digests(&discovery, &sent).await;
         let scanned = Scanned {
             work,
             extraction: 0,
             prefetch: 0,
-            digests: self.prefetch_digests(&discovery, &sent).await,
+            digests,
+            image_digests,
         };
         let tail = self.lookup_tail(&discovery, scanned, now, &sent).await?;
         let mut quiet = BTreeSet::new();

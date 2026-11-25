@@ -39,7 +39,7 @@ enum CatalogAccess {
 }
 impl State for Saved<'_> {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 31;
+    const VERSION: u32 = 32;
     // Code-versioned: the view is datasource output decoded into `Catalog`;
     // a stale-but-decodable view from a release whose transforms moved is
     // worse than a miss.
@@ -48,7 +48,7 @@ impl State for Saved<'_> {
 }
 pub(super) type Evidence = BTreeMap<LookupKey, CatalogEvidence>;
 
-fn reuse_hours(wait_hours: u32) -> Option<u32> {
+pub(crate) fn reuse_hours(wait_hours: u32) -> Option<u32> {
     (wait_hours != 0).then(|| wait_hours.saturating_sub(1).clamp(1, 24))
 }
 /// Milliseconds in an hour, the unit catalog timestamps are kept in.
@@ -183,7 +183,7 @@ pub(crate) struct Controls {
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 31;
+    const VERSION: u32 = 32;
     // Code-versioned: the stored keys come from `identity` and `plan`
     // code, and a key written by older code that no longer matches its
     // dependency quietly un-retries a ticked box.

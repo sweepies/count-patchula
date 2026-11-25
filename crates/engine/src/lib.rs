@@ -382,7 +382,7 @@ impl State for LastRun {
 }
 impl State for LookupHint {
     const NAMESPACE: &'static str = "lookup-hint";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     // Not code-versioned: a hint only names what to prefetch. A stale one
     // costs a wasted read — `resolve_digests` re-reads or overrides it —
     // never a wrong answer, so `VERSION` covers the shape alone and a
@@ -398,25 +398,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 24;
+    const VERSION: u32 = 25;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 27;
+    const VERSION: u32 = 28;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 27;
+    const VERSION: u32 = 28;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 24;
+    const VERSION: u32 = 25;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -490,6 +490,9 @@ struct LookupHint {
     digests: BTreeSet<DigestKey>,
     /// The mutable tag keys the last run's digest resolution wanted.
     tags: BTreeSet<DigestKey>,
+    /// The image `(package, tag)` keys the last run's digest resolution
+    /// wanted.
+    images: BTreeSet<DigestKey>,
 }
 
 impl Engine {
