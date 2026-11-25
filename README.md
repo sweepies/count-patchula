@@ -11,10 +11,73 @@
   </p>
 </div>
 
-The Count reads your repositories' manifests, looks up newer versions, and
-opens one pull request per update, with release notes. One process handles the
-whole batch: repositories run concurrently, and every package is looked up once
-however many repositories use it.
+The Count reads your repositories' manifests through the GitHub API, looks up
+newer versions, and opens one pull request per update with regenerated lockfiles
+and release notes. One native binary handles the whole batch: repositories run
+concurrently, and every package is looked up once however many repositories use
+it.
+
+## Benchmarks
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmarks-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/benchmarks-light.svg">
+  <img alt="Count Patchula vs Renovate 44.261.0 benchmarks: 42.6 s vs 1,351.2 s cold (31.7x faster), 6.4 s vs 392.1 s warm (61.7x faster), 10.5 s vs 954.7 s on grafana/grafana cold (90.8x faster), and 257 MB vs 4.1 GB peak memory (16.5x less)" src="assets/benchmarks-light.svg" width="100%">
+</picture>
+
+Measured against Renovate 44.261.0 on six large public repositories, looking up
+updates without writing, each tool alone on the same 4 vCPU VM. See the
+[benchmarks page](https://count-patchula.sweepy.dev/benchmarks/) for the full
+method, coverage and notes.
+
+<details>
+<summary>Per-repository breakdown (wall time &amp; peak memory)</summary>
+
+| Repository | Patchula cold | Patchula warm | Renovate cold | Renovate warm | Cold speedup |
+|---|---:|---:|---:|---:|---:|
+| `mastodon/mastodon` | **9.7 s**, 195 MB | **1.0 s**, 69 MB | 152.6 s, 2.0 GB | 134.2 s, 905 MB | **15.8×** |
+| `getsentry/sentry` | **8.3 s**, 124 MB | **1.2 s**, 67 MB | 104.5 s, 2.0 GB | 60.4 s, 1.1 GB | **12.7×** |
+| `grafana/grafana` | **10.5 s**, 257 MB | **1.8 s**, 163 MB | 954.7 s, 4.1 GB | 95.3 s, 2.1 GB | **90.8×** |
+| `monicahq/monica` | **3.4 s**, 72 MB | **0.7 s**, 42 MB | 44.6 s, 911 MB | 35.3 s, 637 MB | **13.0×** |
+| `jellyfin/jellyfin` | **5.5 s**, 51 MB | **0.9 s**, 38 MB | 30.9 s, 763 MB | 29.0 s, 689 MB | **5.6×** |
+| `apache/kafka` | **5.2 s**, 56 MB | **0.8 s**, 39 MB | 64.0 s, 1.2 GB | 37.9 s, 880 MB | **12.2×** |
+| **Total** | **42.6 s** | **6.4 s** | **1,351.2 s** | **392.1 s** | **31.7×** |
+
+</details>
+
+## What you get
+
+- **Broad ecosystem coverage** — 30 built-in
+  [managers](https://count-patchula.sweepy.dev/guide/managers/) across
+  application packages, containers, Kubernetes, infrastructure, CI workflows
+  and custom regex extractors, all on by default.
+- **Real lockfiles, regenerated fast** — Committed
+  [lockfiles](https://count-patchula.sweepy.dev/guide/lockfiles/) are rebuilt
+  with each ecosystem's real tool without running repository or install
+  scripts. JavaScript locks (npm, pnpm, Yarn Classic, `aube-lock.yaml`) go
+  through [aube](https://aube.sh), 10–30× faster than the stock package
+  managers.
+- **Typed configuration** — Policy is written in [Pkl](https://pkl-lang.org)
+  against a published schema, so a typo is an error with a file and line number
+  rather than a silently ignored key.
+- **Careful defaults** — Exact pins or locked ranges, digest-pinned actions and
+  container images, a 24-hour release-age wait, verified GitHub-signed commits,
+  and auto-merge off by default (beyond reference data such as CA bundles).
+- **Security fixes first** — Every dependency with an exact version is checked
+  against [OSV.dev](https://osv.dev); fixes skip release-age waits, schedule
+  windows and PR limits.
+- **Dashboard & batching** — A [dependency
+  dashboard](https://count-patchula.sweepy.dev/guide/dashboard/), schedule
+  windows, PR limits, grouping, auto-merge behind check gates, and a
+  [batch PR](https://count-patchula.sweepy.dev/guide/batch/) you fill by
+  ticking a box on any update PR or on the dashboard while keeping the exact
+  versions you reviewed.
+- **MIT-licensed GitHub App server** — Webhooks, scheduled sweeps, a priority
+  queue, multiple installations, warm shared caches and a JSON reporting API in
+  the same binary—no paid enterprise tier required.
+- **Local CLI & TUI** — Browse and selectively apply updates in a checkout with
+  `patchula tui`, automate them with `patchula apply`, or trigger server runs
+  from your terminal with `patchula remote run`.
 
 ## Get started
 
@@ -55,53 +118,6 @@ a [container image](https://count-patchula.sweepy.dev/guide/server/#container-im
 run` runs on it from your machine, signed in with GitHub, with no
 token or toolchain of your own.
 
-## What you get
-
-- Real lockfiles for npm, pnpm, Yarn, Bun, Cargo, Go, Terraform, uv, Poetry,
-  NuGet, Bundler, Composer and mise, regenerated with the real tools. npm, pnpm
-  and Yarn Classic locks go through [aube](https://aube.sh), which is ten to
-  twenty times faster than npm and pnpm at it, and about thirty times faster
-  than Yarn Classic.
-- Managers for JavaScript, GitHub Actions, mise, Rust, Go, Docker, Compose,
-  Kubernetes, Kustomize, Flux, Helm, Terraform, Python, Maven, Gradle, .NET,
-  Ruby, PHP, pre-commit, devcontainers, Woodpecker CI, GitLab CI, Nix flakes, APM,
-  Pkl packages and your own regexes, plus notices for new Copier template versions.
-- Typed configuration in [Pkl](https://pkl-lang.org). A typo is an error with a
-  line number, not a silently ignored key.
-- Careful defaults: exact pins or locked ranges, digest-pinned actions and
-  images, a 24-hour release-age wait, and nothing auto-merges until you say so,
-  except CA root bundles and other reference data, which are only useful while
-  current.
-- Security fixes first: every dependency with an exact version is checked
-  against [OSV.dev](https://osv.dev), and a fix skips the release-age wait,
-  schedule windows and PR limits.
-- A batch PR you fill by ticking a box on any update PR, keeping the version
-  you reviewed.
-- A dependency dashboard, schedule windows, PR limits, grouping and auto-merge
-  behind check gates.
-- A GitHub App server in the same MIT-licensed binary: webhooks, scheduled
-  sweeps, a priority queue, several installations at once and a JSON API for
-  dashboards, where Renovate keeps its reporting API and worker scaling for
-  its paid Enterprise Edition.
-- A terminal UI (`patchula tui`) to browse updates, and in a checkout, pick
-  some and write them into your files. `patchula apply` writes them without
-  asking, for scripts and pre-commit hooks.
-
-## How fast
-
-Against Renovate 44.261.0 on six large public repositories (mastodon, sentry,
-grafana, monica, jellyfin, kafka), each tool alone on the same 4 vCPU VM:
-
-| | Count Patchula | Renovate | |
-|---|---|---|---|
-| All six, cold | **49.3 s** | 1,351.2 s | 27.4× faster |
-| All six, warm | **11.9 s** | 392.1 s | 33.0× faster |
-| `grafana/grafana`, cold | **13.3 s** | 954.7 s | 71.9× faster |
-| Peak memory, grafana cold | **247 MB** | 4.1 GB | 17.2× less |
-
-The [benchmarks page](https://count-patchula.sweepy.dev/benchmarks/) has
-the method and every run.
-
 ## Coming from Renovate
 
 The [compatibility matrix](https://count-patchula.sweepy.dev/renovate/compatibility/)
@@ -134,7 +150,7 @@ Count Patchula is an independent project under the MIT licence.
 Count Patchula would not exist without [@jdx](https://github.com/jdx). His
 work inspired it, and it is built on his tools at every step:
 [mise](https://mise.jdx.dev) installs every toolchain and lockfile engine,
-[aube](https://aube.sh) writes the npm and pnpm locks,
+[aube](https://aube.sh) writes the npm, pnpm, Yarn Classic and aube locks,
 [mr boxington](https://mr-boxington.jdx.dev) caches the builds,
 [usage](https://usage.jdx.dev) generates the CLI reference and completions,
 [tak](https://github.com/jdx/tak) runs the benchmarks,
