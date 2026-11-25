@@ -37,10 +37,11 @@ The Count is one binary, `patchula`. Releases have static builds for Linux
     docker pull ghcr.io/sweepies/count-patchula:X.Y.Z
     ```
 
-    The image runs `patchula serve` with `git` and the pinned `mise` included,
-    for linux/amd64 and linux/arm64. Each release has a tag with its version,
-    and `latest`. The [server guide](/guide/server/#container-image) covers the
-    volume, health check, settings and credentials.
+    The image runs `patchula serve` with `git` included, for linux/amd64 and
+    linux/arm64, and installs mise into its volume on the first start. Each
+    release has a tag with its version, and `latest`. The [server
+    guide](/guide/server/#container-image) covers the volume, health check,
+    settings and credentials.
   </TabItem>
   <TabItem label="Cargo" icon="seti:rust">
     ```sh
