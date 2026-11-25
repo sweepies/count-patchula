@@ -270,6 +270,13 @@ async fn a_recheck_click_reads_prefetched_digests_again() {
             "the recheck reads {tag} from the registry: {manifests:?}"
         );
     }
+    assert!(
+        fake.log()
+            .iter()
+            .any(|(_, path, _)| path.contains("/actions/checkout/git/matching-refs/tags/")),
+        "the recheck reads the action's tag refs again: {:?}",
+        fake.log()
+    );
     assert_eq!(pinned(&rechecked), pinned(&cold));
     check_transcript();
 }

@@ -198,7 +198,9 @@ impl Client {
             .filter(|sha| !out.contains_key(sha))
             .collect();
         // The cache pass above already took every cached blob that hashes
-        // right, so these always ask GitHub.
+        // right, so these always ask GitHub. The REST JSON answer is decoded
+        // directly (offline test fixtures use non-SHA names); cached re-reads
+        // verify `blob_sha` on load.
         let fetched: Vec<Result<(String, Vec<u8>)>> = stream::iter(rest)
             .map(|sha| async move {
                 let response = self

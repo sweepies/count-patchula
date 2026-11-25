@@ -1470,9 +1470,9 @@ impl FakeGitHub {
     /// `repository { object(oid:|expression:) }`: blobs by content,
     /// commits as `{"oid","__typename":"Commit"}`, and the
     /// `statusCheckRollup` contexts a checks read asks for. An expression
-    /// resolves as `git rev-parse` would a ref name: a full ref, a full
-    /// commit SHA, then a bare tag or branch name; an oid resolves blobs
-    /// first, then reads as a commit.
+    /// resolves as `git rev-parse` would a ref name: a full ref, a bare tag
+    /// or branch name, then a full commit SHA; an oid resolves blobs first,
+    /// then reads as a commit.
     fn object_field(&self, field: &GqlField, repo: &Repository, body: &Value) -> Value {
         let names = field.names();
         if let Some(expression) = field.arg("expression", body) {
@@ -1484,13 +1484,13 @@ impl FakeGitHub {
                 .refs
                 .get(expression)
                 .map(String::as_str)
-                .or(sha)
                 .or_else(|| {
                     ["refs/tags/", "refs/heads/"]
                         .iter()
                         .find_map(|prefix| repo.refs.get(&format!("{prefix}{expression}")))
                         .map(String::as_str)
                 })
+                .or(sha)
                 .filter(|oid| repo.commits.contains_key(*oid))
                 .map(|oid| json!({"oid":oid,"__typename":"Commit"}))
                 .unwrap_or(Value::Null);

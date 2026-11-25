@@ -509,7 +509,12 @@ impl Client {
         let mut variables = serde_json::Map::new();
         let mut repositories = BTreeMap::<&str, Vec<usize>>::new();
         let mut locations = BTreeMap::new();
-        for (i, (package, _)) in chunk.iter().enumerate() {
+        for (i, (package, reference)) in chunk.iter().enumerate() {
+            // Invalid refs stay out of GraphQL so `digest` reports `Error::Invalid`
+            // instead of GraphQL answering null and turning them into NotFound.
+            if reference.is_empty() || reference.contains(['?', '#']) {
+                continue;
+            }
             repositories.entry(package).or_default().push(i);
         }
         for (r, (package, indices)) in repositories.into_iter().enumerate() {
@@ -535,15 +540,18 @@ impl Client {
                 objects.join(" ")
             ));
         }
-        let query = format!(
-            "query FreshTagDigests({}){{{}}}",
-            declarations.join(","),
-            fields.join(" ")
-        );
-        let data = self
-            .github
-            .graphql::<Value>(&query, Value::Object(variables))
-            .await;
+        let data = if fields.is_empty() {
+            Err(patchula_github::Error::Graphql(String::new()))
+        } else {
+            let query = format!(
+                "query FreshTagDigests({}){{{}}}",
+                declarations.join(","),
+                fields.join(" ")
+            );
+            self.github
+                .graphql::<Value>(&query, Value::Object(variables))
+                .await
+        };
         let mut resolved = TagDigests::new();
         let mut missing = Vec::new();
         for (i, key) in chunk.iter().enumerate() {
@@ -651,12 +659,14 @@ fn peel(value: &Value) -> Option<&Value> {
 
 /// The most repositories one tag-digest document asks about.
 const REPOSITORIES_PER_QUERY: usize = 8;
-/// The most tags one tag-digest document asks about.
-const TAGS_PER_QUERY: usize = 64;
+/// The most refs one tag-digest document asks about. Each ref emits two
+/// `object(expression:)` fields (tag and bare expression), keeping the query
+/// at most 64 object lookups.
+const TAGS_PER_QUERY: usize = 32;
 
 /// Tag keys grouped into documents. A query's cost grows with the
 /// repositories in it, so a document asks about at most eight repositories
-/// and 64 tags; a repository with more tags is split across documents.
+/// and 32 refs; a repository with more refs is split across documents.
 /// Owned groups: a closure over borrowed slices is not general enough for
 /// the server's boxed Send futures.
 fn tag_groups(keys: &BTreeSet<(String, String)>) -> Vec<Vec<(String, String)>> {

@@ -262,6 +262,8 @@ impl Engine {
             .iter()
             .map(|key| (key.clone(), false))
             .collect();
+        // A stale prefetched image hint dropped later still records `Sent::Image`
+        // conservatively for this run; `save_lookup_hints` narrows the next one.
         let (digests, tags, images) = tokio::join!(
             self.digests(
                 hint_digests.into_iter().map(|key| (key, false)).collect(),

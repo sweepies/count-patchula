@@ -293,10 +293,12 @@ before its first request instead of after a 401, under the same lock, expiry
 and storage rules. It does so only when the read would reach the registry: a
 fresh cached answer needs no token. A failed mint fails the read, as it would
 after the 401. When the registry refuses that just-minted token with a
-challenge naming the same realm and service, the image is missing or private:
-the token is evicted and the 401 is the answer, with no second mint or read.
-A challenge naming another service, or a refusal of a token from memory or
-the cache, still gets its one refresh. A read under an operator entry keeps the 401 exchange: its
+challenge naming the same realm and service, the image is treated as missing
+or private (even if the 401 was transient): the token is evicted and the 401
+is returned for that read, with no second mint or read. Concurrent reads of
+the same image that did not mint it themselves, a challenge naming another
+service, or a refusal of a token from memory or the cache still get one
+refresh. A read under an operator entry keeps the 401 exchange: its
 first request carries the entry's own credentials, and its tokens are an
 account's.
 

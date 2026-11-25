@@ -1917,6 +1917,72 @@ mod tests {
             &image,
             &images
         ));
+
+        // Early-return exits leave `lookup_evidence` to the report and either
+        // carry the resolved current version (post-resolution exits) or leave
+        // it to the report (pre-resolution exits).
+        let now: DateTime<Utc> = DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
+            .unwrap()
+            .into();
+        let mut with_dist_tag = releases.clone();
+        with_dist_tag
+            .dist_tags
+            .insert("latest".into(), "2.1.0".into());
+        for (dep, cat, expects_resolved) in [
+            (npm("latest", None), &with_dist_tag, true),
+            (
+                Dependency {
+                    current: "alpine".into(),
+                    ..image.clone()
+                },
+                &images,
+                true,
+            ),
+            (
+                Dependency {
+                    current: "github:NixOS/nixpkgs".into(),
+                    ..patchula_manager::testing::dependency(
+                        Manager::Nix,
+                        DependencyKind::FlakeInput,
+                        Source::Nix,
+                    )
+                },
+                &releases,
+                false,
+            ),
+            (
+                Dependency {
+                    kind: DependencyKind::Transitive,
+                    ..npm("1.0.0", Some("1.0.0"))
+                },
+                &releases,
+                false,
+            ),
+        ] {
+            let evaluation = plain
+                .evaluate_with(&dep, cat, now, &Default::default(), None)
+                .unwrap();
+            assert!(evaluation.lookup_evidence.is_none(), "{dep:?}");
+            let expected =
+                expects_resolved.then(|| plain.resolved_current_version(&dep, cat).unwrap());
+            assert_eq!(evaluation.resolved_current, expected, "{dep:?}");
+        }
+        let ignored = Evaluator::new(
+            &config("ignore = new Listing { \"*\" }\n"),
+            Default::default(),
+        )
+        .unwrap();
+        let evaluation = ignored
+            .evaluate_with(
+                &npm("1.0.0", Some("1.0.0")),
+                &releases,
+                now,
+                &Default::default(),
+                None,
+            )
+            .unwrap();
+        assert!(evaluation.resolved_current.is_none());
+        assert!(evaluation.lookup_evidence.is_none());
     }
 
     /// `disabled` with `kind` added, in `Update::ALL` order.
