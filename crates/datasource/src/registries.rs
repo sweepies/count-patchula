@@ -38,7 +38,7 @@ fn terraform(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cache
     encode(&catalog)
 }
 pub(crate) const TERRAFORM_CATALOG: Derived<CacheError> =
-    Derived::new("terraform-catalog", 7, terraform);
+    Derived::new("terraform-catalog", 8, terraform);
 
 /// One chart from a Helm repository index: its versions, and what release
 /// notes read from each version's metadata.
@@ -427,13 +427,13 @@ fn simple_any(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cach
     serde_json::to_vec(&catalogs).map_err(|_| CacheError::Document)
 }
 pub(crate) const PYPI_INDEX_CATALOG: Derived<CacheError> =
-    Derived::new("pypi-index-catalog", 7, simple_any);
+    Derived::new("pypi-index-catalog", 8, simple_any);
 
 fn simple(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
     encode(&catalog_of(&simple_files(body)?))
 }
 pub(crate) const PYPI_SIMPLE_CATALOG: Derived<CacheError> =
-    Derived::new("pypi-simple-catalog", 7, simple);
+    Derived::new("pypi-simple-catalog", 8, simple);
 
 #[derive(Deserialize)]
 struct SimpleFile {

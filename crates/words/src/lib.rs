@@ -321,6 +321,7 @@ words!(
     SbomSource {
     #[default]
     Attestation => "attestation",
+    Referrer => "referrer",
     CosignAtt => "cosign-att",
     CosignSbom => "cosign-sbom",
 });

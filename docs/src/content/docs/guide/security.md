@@ -127,6 +127,10 @@ tag update of a pinned image. A first pin has nothing to compare against.
 
 - the BuildKit attestation in the image index, which is where Docker official
   images, and most images built with `docker buildx --sbom`, keep theirs;
+- otherwise an OCI 1.1 referrer (through the `/referrers/` API or, on
+  registries such as GHCR that lack it, the `sha256-<digest>` fallback tag),
+  including Sigstore bundles pushed by `actions/attest-sbom` and direct SPDX
+  artifacts, for the platform's digest first and then the index's;
 - otherwise a cosign attachment: the `sha256-<digest>.att` attestation, whose
   in-toto subject must be the image's digest, or the `sha256-<digest>.sbom`
   tag, for the platform's digest first and then the index's.
@@ -138,13 +142,14 @@ digest, Docker Hub is asked. The Count never downloads image layers.
 
 **What is asked.** Debian, Ubuntu, Alpine, Wolfi and Chainguard packages
 (`deb` and `apk` in the SBOM's package URLs). OSV files Debian and Ubuntu
-advisories under source packages, such as `openssl` for `libssl3`, so the Count
-asks about the source package each binary package comes from. Docker Scout's
-SBOMs list source packages as entries of their own, and syft's name them in an
-`upstream` qualifier. When an SBOM gives no source at all, packages are asked
-about under their own names and the PR says so. The kernel source package
-(`linux`, from `linux-libc-dev`) is left out, because a container never runs the
-image's kernel.
+advisories under source packages, such as `openssl` for `libssl3`, and Alpine
+and Wolfi advisories under the origin package, so the Count asks about the
+source package each binary package comes from. Docker Scout's SBOMs list source
+packages as entries of their own, syft's name them in an `upstream` qualifier,
+and apko's name them in an `origin` qualifier. When an SBOM gives no source at
+all, packages are asked about under their own names and the PR says so. The
+kernel source package (`linux`, from `linux-libc-dev`) is left out, because a
+container never runs the image's kernel.
 
 Images built on RPM distributions, such as Red Hat UBI, AlmaLinux, Oracle
 Linux or Amazon Linux, are not checked yet and are listed as not covered.
@@ -193,11 +198,13 @@ platforms, such as an arm64-only build, is compared on the first platform its
 index lists instead, on both digests.
 
 **Cost.** Manifests and SBOMs are addressed by digest, so each is read once
-and kept in the cache; of an SBOM only the OS packages are kept. A digest or
-cosign tag the registry lacks is asked about again a day later. A warm run
-costs one batched OSV query for the images past their listing freshness, sent
-once the new digests are known, and a HEAD per cosign attestation tag, since
-those tags can move. OSV's
+and kept in the cache; of an SBOM only the OS packages are kept. A digest,
+OCI `/referrers/` endpoint, referrer tag or cosign tag the registry lacks is
+asked about again a day later. A warm run costs one batched OSV query for the
+images past their listing freshness, sent once the new digests are known, plus
+revalidating `/referrers/` on registries that implement it and a HEAD per
+referrer or cosign attestation tag, since new attestations can be attached to
+an existing digest. OSV's
 full record is read for the five most severe advisories a rebuild fixes and the
 five most severe it brings in, so the PR's table and its list of introduced
 advisories carry them; later ones are read only when every fix read so far is

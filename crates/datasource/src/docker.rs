@@ -62,7 +62,7 @@ fn compact_config(
     .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_CONFIG_NOTES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-config-notes", 5, compact_config);
+    patchula_http::Derived::new("oci-config-notes", 6, compact_config);
 
 /// The config of one image or chart version, as release notes read it.
 struct ImageConfig {
@@ -193,7 +193,7 @@ fn oci_catalog(tags: Vec<String>) -> Catalog {
 /// The persisted anonymous pull token: the code that picks and expires the
 /// bearer out of a token answer is its compaction, so it carries its own
 /// version like a `Derived` and `tests/derived-versions.tsv` guards it.
-pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 5);
+pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 6);
 fn token_key(host: &str, path: &str) -> Result<HttpKey> {
     Ok(HttpKey::new(
         "GET",
@@ -217,7 +217,7 @@ fn compact_tags(
     serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-tags", 5, compact_tags);
+    patchula_http::Derived::new("oci-tags", 6, compact_tags);
 
 pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     let package = package.strip_prefix("oci://").unwrap_or(package);
@@ -268,6 +268,8 @@ pub(crate) enum Read {
     Head,
     /// A manifest or index, kept whole.
     Manifest,
+    /// One page of OCI 1.1 `referrers/<digest>`.
+    Referrers,
     /// One page of `tags/list`.
     Tags,
     /// A blob, kept as `derived` makes of it.
@@ -280,6 +282,7 @@ impl Read {
     fn accept(self) -> &'static str {
         match self {
             Self::Head | Self::Manifest => MANIFEST,
+            Self::Referrers => "application/vnd.oci.image.index.v1+json",
             Self::Tags => "application/json",
             Self::Blob { accept, .. } => accept,
         }
@@ -562,7 +565,7 @@ impl Client {
     ) -> Result<Option<patchula_http::Response>> {
         let (method, derived) = match read {
             Read::Head => (reqwest::Method::HEAD, None),
-            Read::Manifest => (reqwest::Method::GET, None),
+            Read::Manifest | Read::Referrers => (reqwest::Method::GET, None),
             Read::Tags => (reqwest::Method::GET, Some(OCI_TAGS)),
             Read::Blob { derived, .. } => (reqwest::Method::GET, Some(derived)),
         };
@@ -583,7 +586,7 @@ impl Client {
         let accept = read.accept();
         Ok(match read {
             Read::Head => self.http.registry_head(url, accept, token).await?,
-            Read::Manifest => self.http.registry_get(url, accept, token).await?,
+            Read::Manifest | Read::Referrers => self.http.registry_get(url, accept, token).await?,
             Read::Tags => {
                 self.http
                     .registry_get_derived(url, accept, token, &OCI_TAGS)

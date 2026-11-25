@@ -41,21 +41,35 @@ carries the first platform the index does list, skipping attestations) or
 1. GET the manifest by digest and check its SHA-256. An index is searched for
    the platform's manifest and for the attestation manifests whose
    `vnd.docker.reference.digest` is that manifest, each in turn; a layer with
-   `in-toto.io/predicate-type: https://spdx.dev/Document` is the SBOM. A single
-   manifest has no platform list, so its config blob is read, checked against
-   its digest and reduced to its `os`, `architecture` and `variant`; one that
-   differs from the requested platform is `NoPlatform`.
-2. Otherwise the cosign tags: `sha256-<digest>.att` for the platform digest,
+   `in-toto.io/predicate-type` naming SPDX 2.x (`https://spdx.dev/Document` or
+   `https://spdx.dev/Document/v2.*`) is the SBOM. A single manifest has no
+   platform list, so its config blob is read, checked against its digest and
+   reduced to its `os`, `architecture` and `variant`; one that differs from the
+   requested platform is `NoPlatform`.
+2. Otherwise OCI 1.1 referrers: `GET /v2/<repo>/referrers/<digest>` for the
+   platform digest and the index digest at once (following same-origin
+   `Link: rel="next"` pages). When a registry answers 400, 404, 405 or 501
+   (GHCR returns 404), the OCI 1.1 fallback tag `sha256-<digest>` joins the
+   cosign HEAD batch below. Each candidate descriptor in a referrers index is
+   filtered by its predicate-type annotation or artifact type (Sigstore bundles
+   with `dsse-envelope` content, direct SPDX artifacts, or in-toto/DSSE
+   referrers; non-SBOM bundles such as SLSA provenance are skipped without
+   fetching their manifests). Each matching referrer manifest is checked against
+   its digest and its `subject.digest`, and any attestation layer (Sigstore
+   bundle, DSSE or in-toto) must name the digest it was found for in its in-toto
+   `subject`.
+3. Otherwise the cosign tags: `sha256-<digest>.att` for the platform digest,
    then the index digest, then `.sbom` for both. A HEAD comes first, so a
-   missing tag costs nothing against pull limits. The four HEADs are sent at
-   once, since most tags are missing, and their answers are taken in that
-   order: the first tag that yields an SBOM wins, and an error ahead of it
-   fails the read. The manifest a tag names is
-   read by the digest in `Docker-Content-Digest` (from the HEAD, or else from
-   the GET) and checked against it; a registry that sends neither has its tag
-   skipped. An `.att` layer must be an SPDX in-toto statement, optionally in a
-   DSSE envelope, whose subject is the digest it was found for.
-3. Each blob's SHA-256 is checked against its digest.
+   missing tag costs nothing against pull limits. Any OCI 1.1 fallback tag
+   HEADs and the four cosign HEADs are sent at once, since most tags are
+   missing, and their answers are taken in order — referrers (platform, then
+   index), then `.att`, then `.sbom`: the first source that yields an SBOM
+   wins, and an error ahead of it fails the read. A tag's manifest is read by
+   the digest in `Docker-Content-Digest` (from the HEAD, or else from the GET)
+   and checked against it; a registry that sends neither has its tag skipped.
+   An `.att` layer must be an SPDX in-toto statement, optionally in a DSSE
+   envelope or Sigstore bundle, whose subject is the digest it was found for.
+4. Each blob's SHA-256 is checked against its digest.
 
 A Docker official image (`library/*` on Docker Hub) is read from
 `mirror.gcr.io` first, and from Docker Hub only when the mirror fails or
@@ -63,25 +77,29 @@ answers 404. Because every byte is checked against its digest, the mirror
 can't change what is read. Registry tokens, retries and rate limits go
 through the same client as every other registry read.
 
-SPDX 2.x is read on its own, in an in-toto statement or in a DSSE envelope
-around one. The blob is reduced once, when fetched, by the `sbom-os` derived
-representation of the [HTTP cache](/internals/cache/): its digest, in-toto
-subjects, generator (SPDX `creationInfo.creators`), the count of OS packages,
-the package types and namespace, the distro, and the set of source packages to
-query. File entries, which make up most of a Docker Scout SBOM, are never
-stored.
+SPDX 2.x is read on its own, in an in-toto statement, in a DSSE envelope
+around one, or in a Sigstore bundle (`dsseEnvelope`) around that. The blob is
+reduced once, when fetched, by the `sbom-os` derived representation of the
+[HTTP cache](/internals/cache/): its digest, in-toto subjects, generator (SPDX
+`creationInfo.creators`), the count of OS packages, the package types and
+namespace (preferring a distro namespace over `unknown`), the distro, and the
+set of source packages to query. File entries, which make up most of a Docker
+Scout SBOM, are never stored.
 
 ## Source packages
 
-OSV's Debian and Ubuntu records name source packages, and Alpine's the origin.
-The reducer takes, for each `deb`, `apk` or `rpm` package URL:
+OSV's Debian and Ubuntu records name source packages, and Alpine's and Wolfi's
+the origin. The reducer takes, for each `deb`, `apk` or `rpm` package URL:
 
 - nothing, when the package is the `spdxElementId` of a `GENERATED_FROM`
-  relationship, because its source is an entry of its own (Docker Scout);
-- the `upstream` qualifier, `name@version` or just `name` (syft);
+  relationship, because its source is an entry of its own (Docker Scout, and
+  apko's top-level entries paired with installed-DB `origin` entries);
+- the `upstream` (syft) or `origin` (apko) qualifier, `name@version` or just
+  `name`;
 - otherwise its own name and version.
 
-The distro comes from `os_name` and `os_version`, or from `distro=name-version`.
+The distro comes from `os_name` and `os_version`, or from `distro=name-version`
+(or a rolling `distro=name`, such as `distro=wolfi`).
 The Debian source `linux` is dropped: OSV lists every kernel advisory against
 it, and a container doesn't run the image's kernel.
 
@@ -90,7 +108,7 @@ debian:bookworm, a 2025 bookworm digest, ubuntu:24.04, an older noble digest,
 alpine:3.20 and alpine:3.20.3, and on a syft SBOM of a Debian 13 image.
 
 An SBOM is `sources_known` when it has a `GENERATED_FROM` relationship, an
-`upstream` qualifier, or comes from Docker Scout. Otherwise it is
+`upstream` or `origin` qualifier, or comes from Docker Scout. Otherwise it is
 `partial-sources`, and its packages are queried under their own names.
 
 ## Ecosystems
@@ -152,10 +170,12 @@ bytes are public and checked against their digest. The exception does not cover
 a read made with an account's token or a [private
 registry](/guide/sources/#private-registries) entry's credentials, whose bytes
 may be private; those follow the registry's `no-store`, and are cached under
-their entry. A
-404 for a digest or a `.att`/`.sbom` tag is kept for a day, never longer. A
-cosign tag's manifest is read by the digest its HEAD names, so only the
-HEAD repeats.
+their entry. A 404 for a digest, an OCI 1.1 `/referrers/` endpoint (whether the
+registry lacks the endpoint or has no referrers yet), a `sha256-<hex>` referrer
+tag, or a `.att`/`.sbom` tag is kept for a day, never longer. A referrer or
+cosign tag's manifest is read by the digest its HEAD names, so only the HEAD
+repeats; a registry that implements `/referrers/` has that listing revalidated
+on warm runs because new referrers can be attached to an existing digest.
 
 The image queries go to OSV in their own batch after the digest phase, because
 the new digests are known only then. Advisory records are read only for the
@@ -193,21 +213,26 @@ so it costs the same with the check on or off.
 ## Tests
 
 - `crates/datasource/src/images.rs` unit tests: syft `upstream` and the
-  kernel filter, Scout source entries, ecosystem names, DSSE subjects.
+  kernel filter, Scout source entries, ecosystem names, DSSE subjects, Sigstore
+  bundles with SPDX 2.3 predicates, and apko Wolfi `origin` and rolling distro
+  reduction.
 - `crates/datasource/tests/registry_protocol.rs`, simulated: an `.att` for
   another subject is skipped for the `.sbom` tag, an SBOM blob whose bytes
   don't match its digest is rejected, an SBOM attestation after a provenance
   one is found, a single manifest is matched to the platform in its config, a
   cosign manifest with no digest is not read, the cosign tags are asked about
-  at once and taken in order, and an official image the mirror lacks is read
-  from Docker Hub.
+  at once and taken in order, OCI 1.1 `/referrers/` (with pagination, Sigstore
+  bundles, provenance skipping, direct SPDX artifacts, and subject checks) and
+  the `sha256-<hex>` fallback tag layout (`actions/attest-sbom`) with error
+  precedence, and an official image the mirror lacks is read from Docker Hub.
 - `crates/lookup/src/images.rs` unit tests: fixed, removed and introduced
   advisories across platforms, an advisory listed for two packages, state
   precedence, and which current-digest states are warnings.
-- `crates/engine/tests/images.rs` replays recordings: two `alpine:3.20` digests
+- `crates/lookup/tests/images.rs` replays recordings: two `alpine:3.20` digests
   from mirror.gcr.io and OSV.dev, where the newer one fixes 29 advisories
   (`fixtures/engine/sboms-alpine.json`); and a Chainguard `.att`, a BuildKit
-  SBOM without OS packages (`busybox`) and an image without an SBOM
+  SBOM without OS packages (`busybox`), an image without an SBOM, and Count
+  Patchula's own GHCR `actions/attest-sbom` OCI referrer Sigstore bundle
   (`fixtures/engine/sboms-registries.json`).
 - `crates/engine/tests/advisories.rs`: a rebuild whose image annotations claim
   a security fix, with no OSV match, gets no fixes and no label, while its twin

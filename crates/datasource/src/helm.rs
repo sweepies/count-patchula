@@ -1045,7 +1045,7 @@ fn helm_walk(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
         .collect();
     serde_json::to_vec(&charts).map_err(|_| CacheError::Document)
 }
-pub(crate) const HELM_INDEX: Derived<CacheError> = Derived::new("helm-index", 7, helm);
+pub(crate) const HELM_INDEX: Derived<CacheError> = Derived::new("helm-index", 8, helm);
 
 #[cfg(test)]
 mod tests {
