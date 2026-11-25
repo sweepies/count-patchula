@@ -271,7 +271,7 @@ pub(crate) struct AdvisoryScope {
 }
 impl State for Stored {
     const NAMESPACE: &'static str = "osv-advisory";
-    const VERSION: u32 = 10;
+    const VERSION: u32 = 11;
     // Code-versioned: the stored advisory is this build's `Record`-to-
     // `Advisory` mapping of the record the scope's id names.
     const CODE_VERSIONED: bool = true;

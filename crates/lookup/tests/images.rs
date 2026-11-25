@@ -97,6 +97,7 @@ async fn registries_publish_sboms_in_each_known_way() {
         ("cgr.dev/chainguard/static", "latest"),
         ("library/busybox", "latest"),
         ("quay.io/argoproj/argocd", "v3.1.8"),
+        ("ghcr.io/sweepies/count-patchula", "0.11.1"),
     ] {
         let digest = client.registry_digest(package, tag).await.unwrap();
         let sbom = client
@@ -137,6 +138,33 @@ async fn registries_publish_sboms_in_each_known_way() {
                 None,
                 Some(patchula_report::ImageState::NoSbom)
             ),
+            (
+                "ghcr.io/sweepies/count-patchula",
+                Some((SbomSource::Referrer, true, true, Some("Wolfi".to_owned()))),
+                None
+            ),
         ]
     );
+    // Verify both platforms of count-patchula 0.11.1 by pinned digest: apko's
+    // Wolfi SBOM reduces cleanly to origin packages and resolves against OSV.
+    const PATCHULA_0_11_1: &str =
+        "sha256:9030ceb2201bf6743e01507d61dcbd07ced9467f1520d11e9345de1eae9a4be3";
+    let mut side = Side::new();
+    for platform in ["linux/amd64", "linux/arm64"] {
+        let sbom = client
+            .image_sbom("ghcr.io/sweepies/count-patchula", PATCHULA_0_11_1, platform)
+            .await
+            .unwrap();
+        let ImageSbom::Found(found) = &sbom else {
+            panic!("{platform}: {sbom:?}");
+        };
+        assert_eq!(found.source, SbomSource::Referrer);
+        assert!(found.cataloger && found.sources_known);
+        assert_eq!(found.ecosystem.as_deref(), Some("Wolfi"));
+        assert_eq!(found.os.as_deref(), Some("wolfi"));
+        assert!(found.sources.iter().any(|(name, _)| name == "curl"));
+        assert!(found.sources.iter().any(|(name, _)| name == "sqlite"));
+        side.insert(platform.to_owned(), Ok(sbom));
+    }
+    assert_eq!(image_state(&side), None);
 }

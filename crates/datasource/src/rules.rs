@@ -61,6 +61,15 @@ fn immutable(url: &Url) -> bool {
     url.path().contains("/manifests/sha256:") || url.path().contains("/blobs/sha256:")
 }
 
+/// An OCI 1.1 referrers listing or its `sha256-<hex>` fallback tag.
+fn referrer(url: &Url) -> bool {
+    let path = url.path();
+    path.contains("/referrers/sha256:")
+        || path
+            .rsplit_once("/manifests/sha256-")
+            .is_some_and(|(_, hex)| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 impl RegistryRules for Rules {
     fn immutable(&self, url: &Url) -> bool {
         immutable(url)
@@ -83,8 +92,10 @@ impl RegistryRules for Rules {
         None
     }
     fn remember_missing(&self, url: &Url) -> Option<Duration> {
-        (immutable(url) || [".att", ".sbom"].iter().any(|s| url.path().ends_with(s)))
-            .then_some(MISSING)
+        (immutable(url)
+            || referrer(url)
+            || [".att", ".sbom"].iter().any(|s| url.path().ends_with(s)))
+        .then_some(MISSING)
     }
     fn pull_quota(&self, method: &Method, url: &Url) -> bool {
         *method == Method::GET
@@ -236,15 +247,20 @@ mod tests {
     }
     const BLOB: &str = "https://ghcr.io/v2/example/image/blobs/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    /// A missing attestation or SBOM is remembered for a day; a missing tag
-    /// is asked about again.
+    /// A missing attestation, referrer or SBOM is remembered for a day; a
+    /// missing tag is asked about again.
     #[tokio::test]
     async fn a_missing_attestation_is_remembered_and_a_missing_tag_is_not() {
+        let hex = "a".repeat(64);
+        let referrers = format!("https://ghcr.io/v2/example/image/referrers/sha256:{hex}");
+        let fallback = format!("https://ghcr.io/v2/example/image/manifests/sha256-{hex}");
         for (url, expected_calls) in [
             (
                 "https://registry-1.docker.io/v2/library/image/manifests/latest.att",
                 1,
             ),
+            (referrers.as_str(), 1),
+            (fallback.as_str(), 1),
             (
                 "https://registry-1.docker.io/v2/library/image/manifests/latest",
                 2,

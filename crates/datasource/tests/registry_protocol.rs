@@ -232,7 +232,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_cache::representation("oci-tags", 5));
+    .representation(&patchula_cache::representation("oci-tags", 6));
     let fetched = cache.http_get(&key).await.unwrap().unwrap().fetched_at;
     assert_eq!(
         sources
@@ -492,7 +492,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_cache::representation("oci-tags", 5));
+    .representation(&patchula_cache::representation("oci-tags", 6));
     let entry = cache.http_get(&key).await.unwrap().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&entry.body).unwrap(),
@@ -778,7 +778,7 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
     .unwrap()
     .representation(&patchula_cache::representation(
         "anonymous-registry-pull-token",
-        5,
+        6,
     ));
     assert!(cache.http_get(&key).await.unwrap().is_none());
     assert!(steps.0.lock().unwrap().is_empty());
@@ -1003,11 +1003,15 @@ async fn a_cosign_attestation_for_another_subject_is_ignored_for_the_sbom_tag() 
     let tag = |d: &str, suffix: &str| format!("{base}/manifests/{}{suffix}", d.replace(':', "-"));
     let blob = |d: String| format!("{base}/blobs/{d}");
     let manifest = |d: &str| format!("{base}/manifests/{d}");
+    let referrers = |d: &str| format!("{base}/referrers/{d}");
+    let empty_referrers = || response(200, r#"{"schemaVersion":2,"manifests":[]}"#, &[]);
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
             format!("{base}/manifests/{digest}"),
             response(200, &index, &[]),
         ),
+        (referrers(&child), empty_referrers()),
+        (referrers(&digest), empty_referrers()),
         (
             tag(&child, ".att"),
             response(200, "", &[("docker-content-digest", &sha(&att))]),
@@ -1184,11 +1188,14 @@ async fn a_cosign_manifest_the_registry_never_names_a_digest_for_is_not_read() {
     let digest = sha(&index);
     let tag = |d: &str, suffix: &str| format!("{BASE}/manifests/{}{suffix}", d.replace(':', "-"));
     let unnamed = |url: String| (url, response(200, "{}", &[]));
+    let empty_referrers = || response(200, r#"{"schemaVersion":2,"manifests":[]}"#, &[]);
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
             format!("{BASE}/manifests/{digest}"),
             response(200, &index, &[]),
         ),
+        (format!("{BASE}/referrers/{child}"), empty_referrers()),
+        (format!("{BASE}/referrers/{digest}"), empty_referrers()),
         unnamed(tag(&child, ".att")),
         unnamed(tag(&child, ".att")),
         (tag(&digest, ".att"), response(404, "", &[])),
@@ -2290,11 +2297,16 @@ async fn cosign_tags_are_asked_about_at_once_and_taken_in_order() {
         ),
     ];
     for (answers, expected) in cases {
+        let empty_referrers = || response(200, r#"{"schemaVersion":2,"manifests":[]}"#, &[]);
         let logged = Logged::new(
-            [(
-                format!("{BASE}/manifests/{digest}"),
-                response(200, &index, &[]),
-            )]
+            [
+                (
+                    format!("{BASE}/manifests/{digest}"),
+                    response(200, &index, &[]),
+                ),
+                (format!("{BASE}/referrers/{child}"), empty_referrers()),
+                (format!("{BASE}/referrers/{digest}"), empty_referrers()),
+            ]
             .into_iter()
             .chain(answers),
         );
@@ -2325,5 +2337,486 @@ async fn cosign_tags_are_asked_about_at_once_and_taken_in_order() {
             .map(|(_, url, _)| url)
             .collect();
         assert_eq!(heads.len(), 4, "{heads:?}");
+    }
+}
+
+fn sigstore_bundle(subject_hex: &str, predicate_type: &str, spdx_json: &str) -> String {
+    use base64::Engine as _;
+    let statement = serde_json::json!({
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicateType": predicate_type,
+        "subject": [{"name": "registry.example/spec/image", "digest": {"sha256": subject_hex}}],
+        "predicate": serde_json::from_str::<serde_json::Value>(spdx_json).unwrap(),
+    });
+    serde_json::json!({
+        "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+        "verificationMaterial": {"certificate": {"rawBytes": "fixture"}},
+        "dsseEnvelope": {
+            "payloadType": "application/vnd.in-toto+json",
+            "payload": base64::engine::general_purpose::STANDARD.encode(statement.to_string()),
+            "signatures": []
+        }
+    })
+    .to_string()
+}
+
+fn sigstore_referrer_manifest(
+    subject_digest: &str,
+    bundle_digest: &str,
+    predicate: &str,
+) -> String {
+    serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+        "config": {
+            "mediaType": "application/vnd.oci.empty.v1+json",
+            "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "size": 2
+        },
+        "layers": [{
+            "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+            "digest": bundle_digest,
+            "size": 1
+        }],
+        "subject": {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": subject_digest,
+            "size": 1
+        },
+        "annotations": {
+            "dev.sigstore.bundle.content": "dsse-envelope",
+            "dev.sigstore.bundle.predicateType": predicate
+        }
+    })
+    .to_string()
+}
+
+/// A registry that implements OCI 1.1 `/referrers/` answers without sending
+/// any fallback or cosign tag HEADs, and skips non-SBOM Sigstore bundles
+/// (such as SLSA provenance) without reading their manifests.
+#[tokio::test]
+async fn oci_referrers_api_reads_sigstore_bundle_and_skips_provenance() {
+    let child_hex = "c".repeat(64);
+    let child = format!("sha256:{child_hex}");
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    let bundle = sigstore_bundle(
+        &child_hex,
+        "https://spdx.dev/Document/v2.3",
+        &spdx("openssl"),
+    );
+    let sbom_manifest =
+        sigstore_referrer_manifest(&child, &sha(&bundle), "https://spdx.dev/Document/v2.3");
+    let referrers_index = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [
+            {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": format!("sha256:{}", "1".repeat(64)),
+                "size": 1,
+                "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "annotations": {
+                    "dev.sigstore.bundle.content": "dsse-envelope",
+                    "dev.sigstore.bundle.predicateType": "https://slsa.dev/provenance/v1"
+                }
+            },
+            {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": sha(&sbom_manifest),
+                "size": 1,
+                "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "annotations": {
+                    "dev.sigstore.bundle.content": "dsse-envelope",
+                    "dev.sigstore.bundle.predicateType": "https://spdx.dev/Document/v2.3"
+                }
+            }
+        ]
+    })
+    .to_string();
+    let logged = Logged::new([
+        (
+            format!("{BASE}/manifests/{digest}"),
+            response(200, &index, &[]),
+        ),
+        (
+            format!("{BASE}/referrers/{child}"),
+            response(200, &referrers_index, &[]),
+        ),
+        (
+            format!("{BASE}/referrers/{digest}"),
+            response(200, r#"{"schemaVersion":2,"manifests":[]}"#, &[]),
+        ),
+        (
+            format!("{BASE}/manifests/{}", sha(&sbom_manifest)),
+            response(200, &sbom_manifest, &[]),
+        ),
+        (
+            format!("{BASE}/blobs/{}", sha(&bundle)),
+            response(200, &bundle, &[]),
+        ),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let found = auth_client_with_transport(logged.clone(), dir.path())
+        .await
+        .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
+        .await
+        .unwrap();
+    let patchula_datasource::ImageSbom::Found(sbom) = found else {
+        panic!("{found:?}");
+    };
+    assert_eq!(sbom.source, patchula_words::SbomSource::Referrer);
+    assert!(
+        sbom.sources
+            .contains(&("openssl".into(), "3.0.17-1".into()))
+    );
+    assert!(
+        logged.log().iter().all(|(method, ..)| method != "HEAD"),
+        "expected no tag HEADs when Referrers API found the SBOM: {:?}",
+        logged.log()
+    );
+    assert!(logged.finished());
+}
+
+/// When `/referrers/` returns 404 (as GHCR does), `actions/attest-sbom`
+/// publishes the referrers index at tag `sha256-<hex>`. Fallback tags and
+/// cosign tags are HEADed in one parallel batch, and the winning tag's index is
+/// read by `Docker-Content-Digest`.
+#[tokio::test]
+async fn oci_referrers_fallback_tag_matches_actions_attest_sbom_layout() {
+    let child_hex = "d".repeat(64);
+    let child = format!("sha256:{child_hex}");
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    let bundle = sigstore_bundle(&child_hex, "https://spdx.dev/Document/v2.3", &spdx("curl"));
+    let sbom_manifest =
+        sigstore_referrer_manifest(&child, &sha(&bundle), "https://spdx.dev/Document/v2.3");
+    let fallback_index = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": sha(&sbom_manifest),
+            "size": 1,
+            "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+            "annotations": {
+                "dev.sigstore.bundle.content": "dsse-envelope",
+                "dev.sigstore.bundle.predicateType": "https://spdx.dev/Document/v2.3"
+            }
+        }]
+    })
+    .to_string();
+    let tag = |d: &str, suffix: &str| format!("{BASE}/manifests/{}{suffix}", d.replace(':', "-"));
+    let missing = || response(404, "", &[]);
+    let logged = Logged::new([
+        (
+            format!("{BASE}/manifests/{digest}"),
+            response(200, &index, &[]),
+        ),
+        (format!("{BASE}/referrers/{child}"), missing()),
+        (format!("{BASE}/referrers/{digest}"), missing()),
+        (
+            tag(&child, ""),
+            response(200, "", &[("docker-content-digest", &sha(&fallback_index))]),
+        ),
+        (tag(&digest, ""), missing()),
+        (tag(&child, ".att"), missing()),
+        (tag(&digest, ".att"), missing()),
+        (tag(&child, ".sbom"), missing()),
+        (tag(&digest, ".sbom"), missing()),
+        (
+            format!("{BASE}/manifests/{}", sha(&fallback_index)),
+            response(200, &fallback_index, &[]),
+        ),
+        (
+            format!("{BASE}/manifests/{}", sha(&sbom_manifest)),
+            response(200, &sbom_manifest, &[]),
+        ),
+        (
+            format!("{BASE}/blobs/{}", sha(&bundle)),
+            response(200, &bundle, &[]),
+        ),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let found = auth_client_with_transport(logged.clone(), dir.path())
+        .await
+        .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
+        .await
+        .unwrap();
+    let patchula_datasource::ImageSbom::Found(sbom) = found else {
+        panic!("{found:?}");
+    };
+    assert_eq!(sbom.source, patchula_words::SbomSource::Referrer);
+    assert!(sbom.sources.contains(&("curl".into(), "3.0.17-1".into())));
+    assert!(
+        logged.peak.load(std::sync::atomic::Ordering::SeqCst) >= 6,
+        "fallback and cosign tags were not HEADed together"
+    );
+    assert!(logged.finished());
+}
+
+/// Referrers API pagination follows same-origin `Link: rel="next"` pages, and
+/// direct `application/spdx+json` referrers work alongside Sigstore bundles
+/// while mismatched manifest or in-toto subjects are skipped.
+#[tokio::test]
+async fn oci_referrers_paginate_skip_wrong_subjects_and_read_direct_spdx() {
+    let child_hex = "e".repeat(64);
+    let child = format!("sha256:{child_hex}");
+    let wrong_hex = "f".repeat(64);
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    // Page 1 has a Sigstore bundle whose in-toto subject is another digest,
+    // plus a direct SPDX manifest whose OCI subject is another digest.
+    let wrong_bundle =
+        sigstore_bundle(&wrong_hex, "https://spdx.dev/Document/v2.3", &spdx("wrong"));
+    let wrong_in_toto_manifest = sigstore_referrer_manifest(
+        &child,
+        &sha(&wrong_bundle),
+        "https://spdx.dev/Document/v2.3",
+    );
+    let direct_doc = spdx("zlib");
+    let wrong_oci_subject_manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "artifactType": "application/spdx+json",
+        "layers": [{"mediaType": "application/spdx+json", "digest": sha(&direct_doc), "size": 1}],
+        "subject": {"digest": format!("sha256:{wrong_hex}"), "size": 1}
+    })
+    .to_string();
+    let good_direct_manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "artifactType": "application/spdx+json",
+        "layers": [{"mediaType": "application/spdx+json", "digest": sha(&direct_doc), "size": 1}],
+        "subject": {"digest": child, "size": 1}
+    })
+    .to_string();
+    let page1 = serde_json::json!({
+        "schemaVersion": 2,
+        "manifests": [
+            {
+                "digest": sha(&wrong_in_toto_manifest),
+                "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "annotations": {"dev.sigstore.bundle.predicateType": "https://spdx.dev/Document/v2.3"}
+            },
+            {
+                "digest": sha(&wrong_oci_subject_manifest),
+                "artifactType": "application/spdx+json"
+            }
+        ]
+    })
+    .to_string();
+    let page2 = serde_json::json!({
+        "schemaVersion": 2,
+        "manifests": [
+            {
+                "digest": format!("sha512:{}", "0".repeat(128)),
+                "artifactType": "application/spdx+json"
+            },
+            {
+                "digest": format!("sha256:{}", "9".repeat(64)),
+                "artifactType": "application/spdx+json"
+            },
+            {
+                "digest": sha(&good_direct_manifest),
+                "artifactType": "application/spdx+json"
+            }
+        ]
+    })
+    .to_string();
+    let next_path = format!("/v2/spec/image/referrers/sha256%3A{child_hex}?page=2");
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            format!("{BASE}/manifests/{digest}"),
+            response(200, &index, &[]),
+        ),
+        (
+            format!("{BASE}/referrers/{child}"),
+            response(
+                200,
+                &page1,
+                &[("link", &format!("<{next_path}>; rel=\"next\""))],
+            ),
+        ),
+        (
+            format!("{BASE}/referrers/{digest}"),
+            response(200, r#"{"schemaVersion":2,"manifests":[]}"#, &[]),
+        ),
+        (
+            format!("{BASE}/manifests/{}", sha(&wrong_in_toto_manifest)),
+            response(200, &wrong_in_toto_manifest, &[]),
+        ),
+        (
+            format!("{BASE}/blobs/{}", sha(&wrong_bundle)),
+            response(200, &wrong_bundle, &[]),
+        ),
+        (
+            format!("{BASE}/manifests/{}", sha(&wrong_oci_subject_manifest)),
+            response(200, &wrong_oci_subject_manifest, &[]),
+        ),
+        (
+            format!("https://registry.example{next_path}"),
+            response(200, &page2, &[]),
+        ),
+        (
+            format!("{BASE}/manifests/sha256:{}", "9".repeat(64)),
+            response(404, "", &[]),
+        ),
+        (
+            format!("{BASE}/manifests/{}", sha(&good_direct_manifest)),
+            response(200, &good_direct_manifest, &[]),
+        ),
+        (
+            format!("{BASE}/blobs/{}", sha(&direct_doc)),
+            response(200, &direct_doc, &[]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let found = client(steps.clone(), dir.path())
+        .await
+        .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
+        .await
+        .unwrap();
+    let patchula_datasource::ImageSbom::Found(sbom) = found else {
+        panic!("{found:?}");
+    };
+    assert_eq!(sbom.source, patchula_words::SbomSource::Referrer);
+    assert!(sbom.sources.contains(&("zlib".into(), "3.0.17-1".into())));
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+/// An error on the index digest's `/referrers/` does not fail a read when the
+/// platform digest's fallback tag wins ahead of it, and does fail the read when
+/// the platform fallback tag is missing.
+#[tokio::test]
+async fn oci_referrers_error_precedence_honours_platform_fallback_tag() {
+    let child_hex = "a".repeat(64);
+    let child = format!("sha256:{child_hex}");
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    let bundle = sigstore_bundle(&child_hex, "https://spdx.dev/Document/v2.3", &spdx("expat"));
+    let sbom_manifest =
+        sigstore_referrer_manifest(&child, &sha(&bundle), "https://spdx.dev/Document/v2.3");
+    let fallback_index = serde_json::json!({
+        "schemaVersion": 2,
+        "manifests": [{
+            "digest": sha(&sbom_manifest),
+            "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+            "annotations": {"dev.sigstore.bundle.predicateType": "https://spdx.dev/Document/v2.3"}
+        }]
+    })
+    .to_string();
+    let tag = |d: &str, suffix: &str| format!("{BASE}/manifests/{}{suffix}", d.replace(':', "-"));
+    let missing = || response(404, "", &[]);
+    for platform_found in [true, false] {
+        let mut answers = vec![
+            (
+                format!("{BASE}/manifests/{digest}"),
+                response(200, &index, &[]),
+            ),
+            (format!("{BASE}/referrers/{child}"), missing()),
+            (format!("{BASE}/referrers/{digest}"), response(500, "", &[])),
+            (
+                tag(&child, ""),
+                if platform_found {
+                    response(200, "", &[("docker-content-digest", &sha(&fallback_index))])
+                } else {
+                    missing()
+                },
+            ),
+            (tag(&child, ".att"), missing()),
+            (tag(&digest, ".att"), missing()),
+            (tag(&child, ".sbom"), missing()),
+            (tag(&digest, ".sbom"), missing()),
+        ];
+        if platform_found {
+            answers.extend([
+                (
+                    format!("{BASE}/manifests/{}", sha(&fallback_index)),
+                    response(200, &fallback_index, &[]),
+                ),
+                (
+                    format!("{BASE}/manifests/{}", sha(&sbom_manifest)),
+                    response(200, &sbom_manifest, &[]),
+                ),
+                (
+                    format!("{BASE}/blobs/{}", sha(&bundle)),
+                    response(200, &bundle, &[]),
+                ),
+            ]);
+        }
+        let logged = Logged::new(answers);
+        let dir = tempfile::tempdir().unwrap();
+        let result = auth_client_with_transport(logged.clone(), dir.path())
+            .await
+            .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
+            .await;
+        if platform_found {
+            let patchula_datasource::ImageSbom::Found(sbom) = result.unwrap() else {
+                panic!("expected Found");
+            };
+            assert_eq!(sbom.source, patchula_words::SbomSource::Referrer);
+        } else {
+            assert!(matches!(
+                result,
+                Err(patchula_datasource::Error::Http(
+                    patchula_http::CacheError::Status(500)
+                ))
+            ));
+        }
+        assert!(logged.finished());
+    }
+}
+
+/// Referrers API pagination refuses foreign-origin and off-path `Link` headers.
+#[tokio::test]
+async fn oci_referrers_pagination_refuses_foreign_and_off_path_links() {
+    let child = format!("sha256:{}", "b".repeat(64));
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    for link in [
+        format!("<https://other.invalid/v2/spec/image/referrers/{child}?page=2>; rel=\"next\""),
+        format!("</v2/other/repo/referrers/{child}?page=2>; rel=\"next\""),
+    ] {
+        let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+            (
+                format!("{BASE}/manifests/{digest}"),
+                response(200, &index, &[]),
+            ),
+            (
+                format!("{BASE}/referrers/{child}"),
+                response(
+                    200,
+                    r#"{"schemaVersion":2,"manifests":[]}"#,
+                    &[("link", &link)],
+                ),
+            ),
+            (
+                format!("{BASE}/referrers/{digest}"),
+                response(200, r#"{"schemaVersion":2,"manifests":[]}"#, &[]),
+            ),
+        ]))));
+        let dir = tempfile::tempdir().unwrap();
+        let error = client(steps.clone(), dir.path())
+            .await
+            .image_sbom("registry.example/spec/image", &digest, "linux/amd64")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, patchula_datasource::Error::Invalid),
+            "{link}: {error}"
+        );
+        assert!(steps.0.lock().unwrap().is_empty());
     }
 }
