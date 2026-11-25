@@ -69,11 +69,10 @@ impl RegistryRules for Rules {
         if registry && immutable(url) && (200..300).contains(&entry.status) {
             return Some(IMMUTABLE);
         }
-        if registry
-            && url.path().ends_with("/tags/list")
-            && entry.etag.is_none()
-            && entry.last_modified.is_none()
-        {
+        // Tag pages get the floor whatever validators they carry: Docker Hub
+        // sends an ETag without max-age, so every warm read would otherwise
+        // be a conditional request per page.
+        if registry && url.path().ends_with("/tags/list") {
             return Some(self.registry_freshness);
         }
         if url.host_str() == Some(GO_PROXY)
@@ -389,8 +388,46 @@ mod tests {
         );
     }
 
+    /// A tag page with an ETag (Docker Hub's answer, no max-age) is served
+    /// locally inside the floor, and a zero floor sends it to the registry.
     #[tokio::test]
-    async fn no_cache_validators_and_unrelated_urls_do_not_get_registry_grace() {
+    async fn tag_pages_with_validators_get_registry_grace() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let tags = "https://registry-1.docker.io/v2/library/redis/tags/list?n=1000";
+        cached_entry(&cache, tags, None, 300, Some("\"etag\"")).await;
+        let client = Cached::with_options(
+            cache.clone(),
+            Arc::new(Never),
+            Options {
+                rules: rules(3600, 3600),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            client
+                .registry_get(tags, "text/plain", None)
+                .await
+                .unwrap()
+                .body,
+            b"catalog"
+        );
+        let transport = Arc::new(Count(AtomicUsize::new(0)));
+        let client = Cached::with_options(
+            cache,
+            transport.clone(),
+            Options {
+                rules: rules(0, 3600),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        client.registry_get(tags, "text/plain", None).await.unwrap();
+        assert_eq!(transport.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn no_cache_and_unrelated_urls_do_not_get_registry_grace() {
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let transport = Arc::new(Count(AtomicUsize::new(0)));
         let client = Cached::with_options(
@@ -404,8 +441,12 @@ mod tests {
         .unwrap();
         for (url, control, etag) in [
             ("https://ghcr.io/v2/a/b/tags/list", Some("no-cache"), None),
-            ("https://ghcr.io/v2/a/c/tags/list", None, Some("tag")),
-            ("https://ghcr.io/v2/a/b/manifests/latest", None, None),
+            (
+                "https://ghcr.io/v2/a/c/tags/list",
+                Some("no-cache"),
+                Some("tag"),
+            ),
+            ("https://ghcr.io/v2/a/b/manifests/latest", None, Some("tag")),
             (
                 "https://proxy.golang.org/example.org/@v/v1.0.0.info",
                 None,

@@ -35,7 +35,7 @@ const COOLDOWN_FALLBACK: Duration = Duration::from_secs(3600);
 pub struct Options {
     pub default_host_concurrency: usize,
     pub host_concurrency: BTreeMap<String, usize>,
-    /// Freshness for validator-free OCI tag pages. Zero restores upstream policy.
+    /// Freshness for OCI tag pages. Zero restores upstream policy.
     pub registry_freshness_secs: u64,
     /// Minimum freshness for public Go proxy lists/latest. Zero disables it.
     pub go_freshness_secs: u64,
@@ -57,7 +57,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            default_host_concurrency: 32,
+            default_host_concurrency: 64,
             host_concurrency: BTreeMap::new(),
             registry_freshness_secs: 3600,
             go_freshness_secs: 3600,
@@ -1172,7 +1172,7 @@ mod tests {
     #[test]
     fn github_keeps_its_own_cap() {
         let mut options = Options::default();
-        assert_eq!(options.default_host_concurrency, 32);
+        assert_eq!(options.default_host_concurrency, 64);
         assert_eq!(options.github_limit(), 16);
         options.default_host_concurrency = 8;
         assert_eq!(options.github_limit(), 8);

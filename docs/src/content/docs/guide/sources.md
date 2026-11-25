@@ -29,7 +29,8 @@ manager, and rules can select by it.
 
 Every response is stored with its validators, and every repeat request is
 conditional. Unauthenticated registries honour their declared `max-age`. Go proxy
-lists and validator-free OCI tag pages get a one-hour local freshness floor
+lists and OCI tag pages get a one-hour local freshness floor, even when they
+carry an ETag or Last-Modified
 (`http.goFreshnessSecs` and `http.registryFreshnessSecs` in the
 [settings](/reference/settings/); `0` restores upstream behaviour), because those endpoints would otherwise be read on every run.
 OSV advisory listings get the same: `http.advisoryFreshnessSecs` (one hour by

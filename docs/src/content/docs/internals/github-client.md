@@ -113,10 +113,16 @@ enables them with `-vv` or `PATCHULA_LOG=debug`.
 Every REST GET looks up validators in SQLite and sends `If-None-Match` or
 `If-Modified-Since` when it has them, even after expiry. The exception is a
 read whose answer cannot change, a Git blob, commit or tree named by its SHA:
-`get_immutable` returns a cached success without a request. `blobs` reads many at once: those
-the cache holds need no request, the rest go through GraphQL fifty to a query,
-and a blob counts from GraphQL only when its text hashes to the SHA asked for.
-Binary, truncated or mismatched blobs come through REST instead. Either way the
+`get_immutable` returns a cached success without a request. `blobs_sized`
+reads many at once, each with the size the tree listing gave (`blobs` passes
+none): those the cache holds need no request. A blob of 256 KiB or more is
+read alone through REST with `Accept: application/vnd.github.raw+json`, which
+answers its bytes without GraphQL's JSON escaping. The rest go through
+GraphQL, at most fifty and 512 KiB of known sizes to a query, side by side
+with the raw reads. A blob counts from either only when its bytes hash to the
+SHA asked for. Binary, truncated or mismatched blobs, and those a raw read or
+query could not give, come through REST's JSON instead; a refused credential
+(401 or 403) stops the read. Either way the
 blob is cached as its REST representation. A cached blob counts only when it
 hashes to its SHA too; one that does not is dropped and read again. A 304 reuses the
 cached status and body and merges headers, keeping a cached pagination `Link`

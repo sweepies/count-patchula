@@ -1470,14 +1470,27 @@ impl FakeGitHub {
     /// `repository { object(oid:|expression:) }`: blobs by content,
     /// commits as `{"oid","__typename":"Commit"}`, and the
     /// `statusCheckRollup` contexts a checks read asks for. An expression
-    /// resolves through refs; an oid resolves blobs first, then reads as a
-    /// commit.
+    /// resolves as `git rev-parse` would a ref name: a full ref, a full
+    /// commit SHA, then a bare tag or branch name; an oid resolves blobs
+    /// first, then reads as a commit.
     fn object_field(&self, field: &GqlField, repo: &Repository, body: &Value) -> Value {
         let names = field.names();
         if let Some(expression) = field.arg("expression", body) {
+            let sha = (expression.len() == 40
+                && expression.bytes().all(|b| b.is_ascii_hexdigit())
+                && repo.commits.contains_key(expression))
+            .then_some(expression);
             return repo
                 .refs
                 .get(expression)
+                .map(String::as_str)
+                .or(sha)
+                .or_else(|| {
+                    ["refs/tags/", "refs/heads/"]
+                        .iter()
+                        .find_map(|prefix| repo.refs.get(&format!("{prefix}{expression}")))
+                        .map(String::as_str)
+                })
                 .filter(|oid| repo.commits.contains_key(*oid))
                 .map(|oid| json!({"oid":oid,"__typename":"Commit"}))
                 .unwrap_or(Value::Null);
@@ -2391,7 +2404,18 @@ impl FakeGitHub {
                     None => json(404, json!({"message":"not found"})),
                 }
             } else if let Some(sha) = rest.strip_prefix("git/blobs/") {
+                let raw = request
+                    .headers()
+                    .get("accept")
+                    .is_some_and(|accept| accept == "application/vnd.github.raw+json");
                 match repo.blobs.get(sha) {
+                    // The raw media type answers the bytes themselves.
+                    Some(content) if raw => Response {
+                        status: StatusCode::OK,
+                        headers: Default::default(),
+                        body: content.as_bytes().to_vec(),
+                        stale: None,
+                    },
                     Some(content) => json(
                         200,
                         json!({"encoding":"base64","content":STANDARD.encode(content)}),
