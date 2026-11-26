@@ -57,7 +57,7 @@ jobs:
           MISE_TASK_OUTPUT: interleave
         run: mise run openbao:lease --role count-patchula-self --github count-patchula-self:PATCHULA_APP_TOKEN
       - if: ${{ !inputs.source }}
-        uses: sweepies/count-patchula@b78f970fd30690e712159d3d32f313fbf9eaaf81 # v0.9.0
+        uses: sweepies/count-patchula@e84a7f0ad796c0733c618b22f16e6ad0eba6b179 # v0.11.1
         with:
           token: ${{ env.PATCHULA_APP_TOKEN }}
       # The action from this commit, running the binary built above.
